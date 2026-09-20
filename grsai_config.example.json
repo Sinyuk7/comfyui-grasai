@@ -11,6 +11,7 @@
     "poll_request_timeout_seconds": 60,
     "download_timeout_seconds": 120,
     "retry_backoff_max_seconds": 30,
+    "poll_retry_limit": 3,
     "download_retry_limit": 3,
     "image_encoding": "base64_png"
   },

@@ -178,6 +178,7 @@ async def test_retry_after_pauses_new_tasks_without_retrying_post(serve, tmp_pat
     await batch.run()
     assert len(times) == 4
     assert times[2] - times[0] >= 0.1
+    assert all(task["status"] == "failed" for task in batch.store.state["tasks"])
 
 
 async def test_cancel_waiting_tasks_and_persist_known_ids(serve, tmp_path):

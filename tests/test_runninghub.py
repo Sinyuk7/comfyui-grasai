@@ -213,6 +213,27 @@ async def test_runninghub_total_deadline(serve):
         })
 
 
+async def test_runninghub_poll_transient_failures_are_bounded(serve):
+    endpoint = "/openapi/v2/rhart-image-n-pro/edit"
+    queries = []
+
+    async def submit(req):
+        return web.json_response({
+            "taskId": "rh-poll-limit", "status": "RUNNING", "errorCode": "", "errorMessage": ""
+        })
+
+    async def query(req):
+        queries.append(1)
+        return web.Response(status=503)
+
+    cfg = await serve([("POST", endpoint, submit), ("POST", "/openapi/v2/query", query)])
+    cfg = replace(cfg, transport=replace(cfg.transport, poll_retry_limit=1))
+    client = RunningHubClient(cfg, KEY, endpoint=endpoint)
+    with pytest.raises(GrsaiError, match="bounded retries"):
+        await client.generate({"prompt": "edit", "imageUrls": ["url"], "resolution": "1k"})
+    assert queries == [1, 1]
+
+
 async def test_runninghub_terminal_error_is_not_retried_as_transient(serve):
     endpoint = "/openapi/v2/rhart-image-n-pro/edit"
     queries = []

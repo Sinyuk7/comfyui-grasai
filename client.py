@@ -19,6 +19,8 @@ from .images import decode_image
 
 logger = logging.getLogger(__name__)
 
+RETRYABLE_HTTP_STATUSES = {429, 502, 503, 504}
+
 
 async def cancellable(awaitable, check_cancel=lambda: None):
     """Check the host signal while I/O is pending, then await cancellation cleanup."""
@@ -61,6 +63,7 @@ class GrsaiClient:
         self.progress = progress
         self.task_id = None
         self.submitted = False
+        self.submission_unknown = False
         self.accepted = accepted
         self.result = result
         self.pressure = pressure
@@ -192,6 +195,7 @@ class GrsaiClient:
                     api, "POST", "/v1/api/generate", t.submit_timeout_seconds, json=request
                 )
             except (aiohttp.ClientError, asyncio.TimeoutError):
+                self.submission_unknown = True
                 raise self._error(
                     "Submission response lost; a remote task may already exist. POST was not retried."
                 ) from None
@@ -231,11 +235,13 @@ class GrsaiClient:
                     except (aiohttp.ClientError, asyncio.TimeoutError):
                         status, next_data, delay = 503, None, None
                     await self._receive(status, next_data, delay)
-                    if status == 429 or 500 <= status <= 599:
+                    if status in RETRYABLE_HTTP_STATUSES:
                         # Explicit terminal task states take precedence over transient HTTP status.
                         if isinstance(next_data, dict) and next_data.get("status") in ("failed", "violation"):
                             self._validate(status, next_data)
                         retry_count += 1
+                        if retry_count > t.poll_retry_limit:
+                            raise self._error("Task status query failed after bounded retries.")
                         if retry_count == 1:
                             log_event(
                                 "poll.reconnecting",
@@ -303,17 +309,23 @@ class GrsaiClient:
                 async with session.get(url, timeout=self._timeout(t.download_timeout_seconds)) as response:
                     delay = retry_after(response.headers.get("Retry-After"))
                     if not 200 <= response.status < 300:
-                        raise self._error(f"Image download HTTP {response.status}.", index)
-                    data = await response.read()
-                # Decode on the execution thread; do not leave detached CPU workers on cancel.
-                image = decode_image(data)
-                self.check_cancel()
-                return image
+                        if response.status not in RETRYABLE_HTTP_STATUSES:
+                            raise self._error(f"Image download HTTP {response.status}.", index)
+                        if attempt == t.download_retry_limit:
+                            raise self._error(
+                                "Image download failed after bounded retries; generation was not repeated.", index
+                            )
+                    else:
+                        data = await response.read()
+                        # Decode on the execution thread; do not leave detached CPU workers on cancel.
+                        image = decode_image(data)
+                        self.check_cancel()
+                        return image
             except ValueError as exc:
                 raise self._error(str(exc), index) from None
-            except (aiohttp.ClientError, asyncio.TimeoutError, GrsaiError):
+            except (aiohttp.ClientError, asyncio.TimeoutError):
                 if attempt == t.download_retry_limit:
                     raise self._error(
                         "Image download failed after bounded retries; generation was not repeated.", index
                     ) from None
-                await self._wait(max(min(2**attempt, t.retry_backoff_max_seconds), delay or 0))
+            await self._wait(max(min(2**attempt, t.retry_backoff_max_seconds), delay or 0))

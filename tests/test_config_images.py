@@ -45,6 +45,7 @@ def test_catalog_and_immutable_snapshot(config):
         ),
         lambda c: c["transport"].update(task_timeout_seconds=0),
         lambda c: c["transport"].update(poll_interval_seconds=float("inf")),
+        lambda c: c["transport"].update(poll_retry_limit=4),
         lambda c: c["transport"].update(download_retry_limit=4),
         lambda c: c["transport"].update(generate_path="/anything"),
     ],

@@ -41,6 +41,7 @@ class Transport:
     poll_request_timeout_seconds: float = 60
     download_timeout_seconds: float = 120
     retry_backoff_max_seconds: float = 30
+    poll_retry_limit: int = 3
     download_retry_limit: int = 3
     image_encoding: str = "base64_png"
 
@@ -137,8 +138,10 @@ def parse_config(raw) -> Config:
                 continue
             if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
                 raise ConfigError(f"{name} must be a positive finite number.")
-    if type(transport.download_retry_limit) is not int or not 0 <= transport.download_retry_limit <= 3:
-        raise ConfigError("download_retry_limit must be an integer from 0 to 3.")
+    for name in ("poll_retry_limit", "download_retry_limit"):
+        value = getattr(transport, name)
+        if type(value) is not int or not 0 <= value <= 3:
+            raise ConfigError(f"{name} must be an integer from 0 to 3.")
     if transport.image_encoding not in {"base64_png", "data_url_png"}:
         raise ConfigError("Unsupported image_encoding.")
     presets = raw["parameter_presets"]

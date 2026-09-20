@@ -6,7 +6,7 @@ from urllib.parse import urlsplit
 
 import aiohttp
 
-from .client import GrsaiClient, cancellable
+from .client import RETRYABLE_HTTP_STATUSES, GrsaiClient, cancellable
 from .diagnostics import log_event
 from .errors import clean_message
 
@@ -85,7 +85,7 @@ class RunningHubClient(GrsaiClient):
                 url = (data.get("data") or {}).get("download_url") if isinstance(data, dict) else None
                 if 200 <= status < 300 and isinstance(data, dict) and data.get("code") == 0 and isinstance(url, str) and url:
                     return url
-                if status != 429 and status < 500:
+                if status not in RETRYABLE_HTTP_STATUSES:
                     message = data.get("message") if isinstance(data, dict) else "Invalid upload response."
                     raise self._error(f"Reference image upload failed: {clean_message(message, self._secrets)}", index)
             except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -113,6 +113,7 @@ class RunningHubClient(GrsaiClient):
                     api, "POST", self.endpoint, t.submit_timeout_seconds, json=request
                 )
             except (aiohttp.ClientError, asyncio.TimeoutError):
+                self.submission_unknown = True
                 raise self._error(
                     "Submission response lost; a remote task may already exist. POST was not retried."
                 ) from None
@@ -135,7 +136,7 @@ class RunningHubClient(GrsaiClient):
                     except (aiohttp.ClientError, asyncio.TimeoutError):
                         status, next_data, delay = 503, None, None
                     await self._receive(status, next_data, delay)
-                    if status == 429 or 500 <= status <= 599:
+                    if status in RETRYABLE_HTTP_STATUSES:
                         if isinstance(next_data, dict) and (
                             str(next_data.get("status", "")).upper() in {"FAILED", "CANCEL"}
                             or next_data.get("errorCode")
@@ -143,6 +144,8 @@ class RunningHubClient(GrsaiClient):
                         ):
                             self._validate(status, next_data)
                         retry_count += 1
+                        if retry_count > t.poll_retry_limit:
+                            raise self._error("Task status query failed after bounded retries.")
                         await self._notify("reconnecting")
                         await self._wait(max(backoff, delay or 0))
                         backoff = min(backoff * 2, t.retry_backoff_max_seconds)

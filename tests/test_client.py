@@ -216,6 +216,45 @@ async def test_lost_submission_no_retry(serve):
     assert len(calls) == 1
 
 
+async def test_poll_transient_failures_are_bounded(serve):
+    polls = []
+
+    async def generate(req):
+        return web.json_response({"id": "task-poll-limit", "status": "running"})
+
+    async def result(req):
+        polls.append(1)
+        return web.Response(status=503)
+
+    cfg = await serve([("POST", "/v1/api/generate", generate), ("GET", "/v1/api/result", result)])
+    cfg = replace(cfg, transport=replace(cfg.transport, poll_retry_limit=2))
+    with pytest.raises(GrsaiError, match="bounded retries") as error:
+        await GrsaiClient(cfg, KEY).generate(request(cfg))
+    assert len(polls) == 3
+    assert error.value.task_id == "task-poll-limit"
+
+
+async def test_download_terminal_http_error_is_not_retried(serve):
+    downloads = []
+    cfg = None
+
+    async def generate(req):
+        return web.json_response({
+            "id": "task-download-404",
+            "status": "succeeded",
+            "results": [{"url": cfg.base_url + "/missing"}],
+        })
+
+    async def missing(req):
+        downloads.append(1)
+        return web.Response(status=404)
+
+    cfg = await serve([("POST", "/v1/api/generate", generate), ("GET", "/missing", missing)])
+    with pytest.raises(GrsaiError, match="HTTP 404"):
+        await GrsaiClient(cfg, KEY).generate(request(cfg))
+    assert downloads == [1]
+
+
 async def test_partial_download_failure_is_atomic(serve):
     attempts = []
     cfg = None

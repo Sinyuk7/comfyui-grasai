@@ -197,7 +197,7 @@ class BatchRunner:
                 self.fatal = error
             outputs = self.store.state["tasks"][spec.task_index - 1]["outputs"]
             state = "partial" if outputs else (
-                "submission_unknown" if client and client.submitted and not client.task_id else "failed"
+                "submission_unknown" if client and client.submission_unknown else "failed"
             )
             await self.store.update(spec.task_index, status=state, error=error,
                                     remote_status=client.remote_status if client else None)
