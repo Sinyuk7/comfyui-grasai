@@ -91,6 +91,26 @@ def _text(value, where):
     return value
 
 
+def normalize_base_url(value, where="base_url"):
+    base = _text(value, where).rstrip("/")
+    url = urlsplit(base)
+    if (
+        url.scheme not in {"http", "https"}
+        or not url.hostname
+        or url.username
+        or url.password
+        or url.path
+        or url.query
+        or url.fragment
+    ):
+        raise ConfigError(f"{where} must be an HTTP(S) host root without credentials, path or query.")
+    try:
+        url.port
+    except ValueError:
+        raise ConfigError(f"Invalid {where} port.") from None
+    return base
+
+
 def parse_config(raw) -> Config:
     fields = {
         "schema_version",
@@ -107,22 +127,7 @@ def parse_config(raw) -> Config:
         raise ConfigError("batch_reference_limit must be an integer from 1 to 100 (local safety limit).")
     if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
         raise ConfigError("Unsupported schema_version; expected 1.")
-    base = _text(raw["base_url"], "base_url").rstrip("/")
-    url = urlsplit(base)
-    if (
-        url.scheme not in {"http", "https"}
-        or not url.hostname
-        or url.username
-        or url.password
-        or url.path
-        or url.query
-        or url.fragment
-    ):
-        raise ConfigError("base_url must be an HTTP(S) host root without credentials, path or query.")
-    try:
-        url.port
-    except ValueError:
-        raise ConfigError("Invalid base_url port.") from None
+    base = normalize_base_url(raw["base_url"])
     network = _object(raw["transport"], Transport.__dataclass_fields__, (), "transport")
     transport = Transport(**network)
     for name in Transport.__dataclass_fields__:

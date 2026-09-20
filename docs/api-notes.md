@@ -100,10 +100,12 @@ VIP 自定义像素值约束：两边均为 16 的倍数，最长边 ≤ 3840，
 
 目前没有真实服务返回记录；快照中的示例不能作为成功联调证据。
 
-## 7. API Key 余额接口（追加范围）
+## 7. 账户余额与模型状态接口
 
-用户补充了 `POST /client/openapi/getAPIKeyCredits`，请求 JSON 为 `{"apiKey":"..."}`；业务成功为 `code: 0`，余额读取 `data.credits`。这是 API Key 的积分余额，不是单次生成计费明细，也不是账户 token 余额接口。
+账户余额使用 `POST /client/openapi/getCredits`，请求 JSON 为 `{"token":"..."}`；业务成功为 `code: 0`，余额读取 `data.credits`。Token 来自用户信息页，与生成认证使用的 API Key 不同。
 
-官方“其他 API”页面确认全球/国内 Host 与生成接口所用 Host 相同；余额路径位于主机根目录。完整字段契约来自用户粘贴的文档，来源边界见 [原文记录](references/user-provided-api-key-credits.md)。尚未做带 Key 的真实调用。
+官方“其他 API”页面确认全球/国内 Host 与生成接口所用 Host 相同；余额路径位于主机根目录。尚未做带 Token 的真实调用。
 
-用户选择生成结束后在节点内自动刷新。该查询使用独立短超时，失败不影响已生成图片；不能将 HTTP 200、缺失 credits 或业务失败误读为余额 0。
+生成结束后自动刷新余额。该查询使用独立短超时，失败不影响已生成图片；不能将 HTTP 200、缺失 credits 或业务失败误读为余额 0。
+
+模型状态使用 `GET /client/common/getModelStatus?model=<model>`。模型切换时执行非阻塞查询；只有 `code: 0` 且 `data.status` 为布尔值才视为有效结果。`false` 时将 `data.error` 作为临时英文警告；正常、超时或协议错误均不占用固定界面字段，也不阻止生成。自动查询只允许官方 Host 或服务器配置的默认 Base URL，防止未执行工作流时向任意地址发起后端请求。

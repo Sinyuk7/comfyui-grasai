@@ -40,6 +40,10 @@ async def main():
 
         await page.route("**/prompt", prevent_queue)
         await page.route("**/api/prompt", prevent_queue)
+        await page.route("**/grsai/model-status", lambda route: route.fulfill(
+            status=200, content_type="application/json",
+            body='{"ok":true,"available":true,"error":""}',
+        ))
         await page.goto(args.url)
         await page.wait_for_function(
             "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.GRSAIBatchImageGenerate)",
@@ -52,10 +56,12 @@ async def main():
             const node = window.LiteGraph.createNode(name); app.graph.add(node); return node;
           };
           app.graph.clear();
+          const config = make('GRSAIAPIConfig');
           const folder = make('GRSAILoadImagesFromFolder');
           const second = make('GRSAILoadImagesFromFolder');
           const third = make('GRSAILoadImagesFromFolder');
           const batch = make('GRSAIBatchImageGenerate');
+          config.connect(0, batch, batch.inputs.findIndex(i => i.name === 'api_config'));
           const promptsNode = make('PrimitiveStringMultiline');
           promptsNode.widgets.find(w => w.name === 'value').value = 'Standing fashion portrait';
           promptsNode.connect(0, batch, batch.inputs.findIndex(i => i.name === 'prompts'));
@@ -77,7 +83,7 @@ async def main():
           const get = name => batch.widgets.find(w => w.name === name);
           const set = (name,value) => {const w=get(name); w.value=value;w.callback?.(value);};
           set('output_prefix', 'Clothes');
-          set('api_key', testKey);
+          config.widgets.find(w => w.name === 'api_key').value = testKey;
           set('prompt', 'Edit Image 1 using the clothing in Image 2 and Image 3.');
           set('model','gpt-image-2-vip');
           const quality = get('model.quality').value;
@@ -86,9 +92,27 @@ async def main():
           api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
             node_id:batch.id,ui_token:batch.properties.grsai_ui_token,sequence:100,
             stage:'planned',base_count:10,prompt_count:4,total:40,concurrency:4,
-            directory:'output/grsai/example',completed:0,success:0,failed:0
+            directory:'output/image_api/example',completed:0,success:0,failed:0
           }}));
-          const status=get('grsai_status').value;
+          const status=get('status').value;
+          api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
+            node_id:batch.id,ui_token:batch.properties.grsai_ui_token,sequence:101,
+            stage:'running',base_count:10,prompt_count:4,total:40,concurrency:4,
+            directory:'output/image_api/example',completed:17,success:16,failed:1,running:1,
+            active:[{task_index:18,stage:'running',progress:42}]
+          }}));
+          const progressWidget=get('progress');
+          const progressKnown={label:progressWidget.element.textContent,
+            indeterminate:progressWidget.element.dataset.indeterminate,
+            width:progressWidget.element.firstElementChild.firstElementChild.style.width};
+          api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
+            node_id:batch.id,ui_token:batch.properties.grsai_ui_token,sequence:102,
+            stage:'running',base_count:1,prompt_count:1,total:1,concurrency:1,
+            directory:'output/image_api/example',completed:0,success:0,failed:0,running:1,
+            active:[{task_index:1,stage:'running',progress:null}]
+          }}));
+          const progressUnknown={label:progressWidget.element.textContent,
+            indeterminate:progressWidget.element.dataset.indeterminate};
           folder.onExecuted({grsai_files:['001_person.png']});
           second.onExecuted({grsai_files:['001_shirt.png','002_shirt.png']});
           const widgets=batch.widgets.map(w=>({name:w.name,value:w.value}));
@@ -99,7 +123,8 @@ async def main():
           const prefix=reloaded.widgets.find(w=>w.name==='output_prefix').value;
           const apiPrompt=await app.graphToPrompt();
           const batchPrompt=Object.values(apiPrompt.output).find(n=>n.class_type==='GRSAIBatchImageGenerate');
-          const reloadedKey=reloaded.widgets.find(w=>w.name==='api_key').value;
+          const reloadedConfig=app.graph._nodes.find(n=>n.comfyClass==='GRSAIAPIConfig');
+          const reloadedKey=reloadedConfig.widgets.find(w=>w.name==='api_key').value;
           const reloadedFallback=reloaded.widgets.find(w=>w.name==='prompt').value;
           const promptsLink=batchPrompt.inputs.prompts;
           const connectedPrompt=apiPrompt.output[promptsLink[0]];
@@ -108,23 +133,31 @@ async def main():
             .find(n=>n.class_type==='GRSAIBatchImageGenerate');
           const restoredPrompts=app.graph._nodes.find(n=>n.comfyClass==='PrimitiveStringMultiline');
           restoredPrompts.connect(0,reloaded,reloaded.inputs.findIndex(i=>i.name==='prompts'));
-          const restoredKey=reloaded.widgets.find(w=>w.name==='api_key');
+          const restoredKey=reloadedConfig.widgets.find(w=>w.name==='api_key');
           restoredKey.value=''; restoredKey.callback?.('');
-          app.canvas.ds.scale=0.8;
-          app.canvas.ds.offset=[70,30];
+          app.canvas.ds.scale=1;
+          app.canvas.ds.offset=[0,0];
+          reloaded.pos=[620,110];
           reloaded.size=[760,620];
           api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
             node_id:reloaded.id,ui_token:reloaded.properties.grsai_ui_token,sequence:101,
             stage:'planned',base_count:10,prompt_count:4,total:40,concurrency:4,
-            directory:'output/grsai/example',completed:0,success:0,failed:0
+            directory:'output/image_api/example',completed:0,success:0,failed:0
           }}));
           for(const n of app.graph._nodes.filter(n=>n.comfyClass==='GRSAILoadImagesFromFolder')) {
             n.onExecuted({grsai_files:['001.png','002.png']});
           }
+          const setReloaded = (name,value) => {const w=reloaded.widgets.find(item=>item.name===name);
+            w.value=value;w.callback?.(value);};
+          setReloaded('model','gpt-image-2.5-sunburst');
           app.canvas.setDirty(true,true);
-          return {connected,hole,quality,status,widgets,serialized,reloadedInputs,prefix,batchPrompt,
+          await new Promise(requestAnimationFrame);
+          await new Promise(requestAnimationFrame);
+          return {connected,hole,quality,status,progressKnown,progressUnknown,widgets,serialized,reloadedInputs,prefix,batchPrompt,
             apiOutput:apiPrompt.output,reloadedKey,reloadedFallback,connectedPrompt,disconnectedPrompt,
-            outputs:reloaded.outputs.map(o=>({name:o.name,type:o.type}))};
+            outputs:reloaded.outputs.map(o=>({name:o.name,type:o.type})),
+            aspectPoint:[reloaded.pos[0]+reloaded.size[0]/2,
+              reloaded.pos[1]+reloaded.widgets.find(w=>w.name==='model.aspectRatio').last_y+12]};
         }""", TEST_KEY)
         print(json.dumps(result, ensure_ascii=False, indent=2).replace(TEST_KEY, "[test-key]"))
         connected = {i["name"]: i for i in result["connected"]}
@@ -134,11 +167,16 @@ async def main():
         assert hole["references.reference_3"]["link"] == connected["references.reference_3"]["link"]
         assert result["quality"] == "medium"
         assert "40" in result["status"]
+        assert "42%" in result["progressKnown"]["label"]
+        assert result["progressKnown"]["indeterminate"] == "false"
+        assert result["progressKnown"]["width"] == "43.55%"
+        assert "Generating" in result["progressUnknown"]["label"]
+        assert result["progressUnknown"]["indeterminate"] == "true"
         assert result["prefix"] == "Clothes"
-        assert [o["name"] for o in result["outputs"]] == ["images", "manifest"]
+        assert [o["name"] for o in result["outputs"]] == ["Images", "Manifest"]
         assert result["batchPrompt"]["inputs"]["max_concurrency"] == 4
         assert all(f"references.reference_{i}" in result["batchPrompt"]["inputs"] for i in (1, 2, 3))
-        assert "grsai_status" not in result["batchPrompt"]["inputs"]
+        assert "status" not in result["batchPrompt"]["inputs"]
         assert not forbidden_posts
         assert result["reloadedKey"] == TEST_KEY
         assert result["connectedPrompt"]["class_type"] == "PrimitiveStringMultiline"
@@ -146,17 +184,37 @@ async def main():
         assert "prompts" not in result["disconnectedPrompt"]["inputs"]
         assert result["disconnectedPrompt"]["inputs"]["prompt"] == result["reloadedFallback"]
         assert key_paths(result["apiOutput"], TEST_KEY) == [
-            (next(k for k, v in result["apiOutput"].items() if v["class_type"] == "GRSAIBatchImageGenerate"),
+            (next(k for k, v in result["apiOutput"].items() if v["class_type"] == "GRSAIAPIConfig"),
              "inputs", "api_key")
         ]
         for key_path in key_paths(result["serialized"], TEST_KEY):
             assert key_path[0] == "nodes"
-            assert result["serialized"]["nodes"][key_path[1]]["type"] == "GRSAIBatchImageGenerate"
+            assert result["serialized"]["nodes"][key_path[1]]["type"] == "GRSAIAPIConfig"
             assert key_path[2:] in [("widgets_values", 0), ("widgets_values_named", "api_key")]
         assert key_paths(result["serialized"], TEST_KEY)  # Confirm the documented workflow risk exists.
         for saved in result["serialized"]["nodes"]:
             if saved["type"] == "GRSAILoadImagesFromFolder":
                 assert "grsai_files" not in saved.get("widgets_values_named", {})
+        await page.mouse.click(*result["aspectPoint"])
+        expected_label = "1024x1024 (1:1, 1K)"
+        option = page.get_by_role("menuitem", name=expected_label, exact=True)
+        await option.wait_for()
+        assert expected_label in await page.locator("body").inner_text()
+        await option.click()
+        prompt = await page.evaluate("app.graphToPrompt()")
+        generated = next(value for value in prompt["output"].values()
+                         if value["class_type"] == "GRSAIBatchImageGenerate")
+        assert generated["inputs"]["model.aspectRatio"] == "1024x1024"
+        await page.evaluate("""async () => {
+          const batch=app.graph._nodes.find(n=>n.comfyClass==='GRSAIBatchImageGenerate');
+          const {api}=await import('/scripts/api.js');
+          api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
+            node_id:batch.id,ui_token:batch.properties.grsai_ui_token,sequence:102,
+            stage:'running',base_count:10,prompt_count:4,total:40,concurrency:4,
+            directory:'output/image_api/example',completed:17,success:16,failed:1,running:1,
+            active:[{task_index:18,stage:'running',progress:42}]
+          }}));
+        }""")
         await page.screenshot(path=args.screenshot, full_page=True)
         print("PAGE_ERRORS", errors)
         await browser.close()

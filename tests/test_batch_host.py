@@ -23,6 +23,7 @@ def host(monkeypatch, tmp_path):
     import folder_paths
     import nodes
     from comfy_api.latest import io
+    from grsai.api_config import APIConfig
     from grsai.batch_nodes import GRSAIBatchImageGenerate, GRSAILoadImagesFromFolder
     from grsai import host as adapter
 
@@ -38,6 +39,7 @@ def host(monkeypatch, tmp_path):
 
     for name, node in [("GRSAIBatchImageGenerate", GRSAIBatchImageGenerate),
                        ("GRSAILoadImagesFromFolder", GRSAILoadImagesFromFolder),
+                       ("GRSAIAPIConfig", APIConfig),
                        ("TestBatchPrompts", Prompts)]:
         monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, name, node)
     (tmp_path / "output").mkdir()
@@ -54,9 +56,17 @@ def host(monkeypatch, tmp_path):
     return execution, GRSAIBatchImageGenerate, GRSAILoadImagesFromFolder, events, refreshes
 
 
-def inputs():
-    return {"api_key": "host-test-key", "model": "nano-banana-2", "model.aspectRatio": "auto",
+def inputs(linked=False):
+    from grsai.api_settings import RuntimeAPIConfig
+    from grsai.config import get_config
+
+    api_config = ["0", 0] if linked else RuntimeAPIConfig("host-test-key", get_config().base_url, "token")
+    return {"api_config": api_config, "model": "nano-banana-2", "model.aspectRatio": "auto",
             "model.imageSize": "1K", "prompt": "fallback", "max_concurrency": 4, "output_prefix": "Clothes"}
+
+
+def config_node(api_key="host-test-key", token="token"):
+    return {"class_type": "GRSAIAPIConfig", "inputs": {"api_key": api_key, "base_url": "", "token": token}}
 
 
 def test_schema(host):
@@ -124,10 +134,11 @@ async def test_full_executor_dual_outputs_prompt_list_and_repeat_queue(host, mon
     server = SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None)
     executor = execution.PromptExecutor(server, cache_args={"ram": 0, "ram_inactive": 0, "lru": 0})
     graph = {
+        "0": config_node(),
         "1": {"class_type": "GRSAILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
         "2": {"class_type": "TestBatchPrompts", "inputs": {}},
         "3": {"class_type": "GRSAIBatchImageGenerate", "inputs": {
-            **inputs(), "references.reference_1": ["1", 0], "references.reference_2": ["1", 1],
+            **inputs(linked=True), "references.reference_1": ["1", 0], "references.reference_2": ["1", 1],
             "prompts": ["2", 0]}},
         "4": {"class_type": "PreviewImage", "inputs": {"images": ["3", 0]}},
         "5": {"class_type": "SaveImage", "inputs": {"images": ["3", 0], "filename_prefix": "downstream"}},
@@ -140,7 +151,7 @@ async def test_full_executor_dual_outputs_prompt_list_and_repeat_queue(host, mon
         assert len(executor.history_result["outputs"]["4"]["images"]) == 4
         assert len(executor.history_result["outputs"]["5"]["images"]) == 4
     assert len(calls) == 8 and len(refreshes) == 2
-    manifests = list((tmp_path / "output" / "grsai").glob("*/manifest.json"))
+    manifests = list((tmp_path / "output" / "image_api").glob("*/manifest.json"))
     assert len(manifests) == 2
     for path in manifests:
         data = json.loads(path.read_text())
@@ -166,9 +177,10 @@ async def test_batch_is_terminal_and_all_failed_still_returns_report(host, monke
         raise GrsaiError("failed")
 
     monkeypatch.setattr(GrsaiClient, "generate", generate)
-    graph = {"1": {"class_type": "GRSAILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
+    graph = {"0": config_node(),
+             "1": {"class_type": "GRSAILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
              "2": {"class_type": "GRSAIBatchImageGenerate", "inputs": {
-                 **inputs(), "references.reference_1": ["1", 0]}},
+                 **inputs(linked=True), "references.reference_1": ["1", 0]}},
              "3": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}}}
     executor = execution.PromptExecutor(SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None),
                                         cache_args={"ram": 0, "ram_inactive": 0, "lru": 0})
@@ -209,7 +221,11 @@ async def test_host_preflight_never_submits(host, monkeypatch, case):
     values["references.reference_1"] = [torch.zeros(2, 2, 3, 3)]
     values[f"references.{name}"] = [torch.zeros(3 if case == "mismatch" else 2, 2, 3, 3)]
     if case == "key_list":
-        values["api_key"] = ["key-1", "key-2"]
+        from grsai.api_settings import RuntimeAPIConfig
+        from grsai.config import get_config
+
+        values["api_config"] = [RuntimeAPIConfig("key-1", get_config().base_url),
+                                RuntimeAPIConfig("key-2", get_config().base_url)]
     if case == "prompt_type":
         values["prompt"] = [123]
     if case == "concurrency":
@@ -254,7 +270,7 @@ async def test_real_batch_adapter_and_local_http(host, serve, monkeypatch, tmp_p
         return web.json_response({"id": f"http-{len(calls)}", "status": "running"})
 
     async def result(req):
-        paths = list((tmp_path / "output" / "grsai").glob("*/manifest.json"))
+        paths = list((tmp_path / "output" / "image_api").glob("*/manifest.json"))
         data = json.loads(paths[0].read_text())
         assert any(t["remote_task_id"] == req.query["id"] for t in data["tasks"])
         return web.json_response({"id": req.query["id"], "status": "succeeded",
@@ -269,6 +285,9 @@ async def test_real_batch_adapter_and_local_http(host, serve, monkeypatch, tmp_p
     monkeypatch.setattr(batch_nodes, "get_config", lambda: cfg)
     flat = {**inputs(), "references.reference_1": ["x", 0], "prompts": ["y", 0]}
     values, _, v3_data = execution.get_input_data(flat, batch, "17")
+    from grsai.api_settings import RuntimeAPIConfig
+
+    values["api_config"] = [RuntimeAPIConfig("host-test-key", cfg.base_url, "token")]
     values["references.reference_1"] = [torch.zeros(2, 2, 3, 3)]
     values["prompts"] = [["first", "second"]]
     output = await execution._async_map_node_over_list("http", "17", batch(), values, "execute", v3_data=v3_data)
@@ -293,9 +312,10 @@ async def test_folder_content_changes_invalidate_real_executor_cache(host, monke
         return [], str(self.store.manifest)
 
     monkeypatch.setattr(BatchRunner, "run", run)
-    graph = {"1": {"class_type": "GRSAILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
+    graph = {"0": config_node(),
+             "1": {"class_type": "GRSAILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
              "2": {"class_type": "GRSAIBatchImageGenerate", "inputs": {
-                 **inputs(), "references.reference_1": ["1", 0]}}}
+                 **inputs(linked=True), "references.reference_1": ["1", 0]}}}
     executor = execution.PromptExecutor(SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None),
                                        cache_args={"ram": 0, "ram_inactive": 0, "lru": 100})
     for attempt in range(4):
@@ -338,19 +358,21 @@ async def test_test_key_persistence_boundary_in_actual_saved_pngs(host, monkeypa
         return [image]
 
     monkeypatch.setattr(GrsaiClient, "generate", generate)
-    graph = {"1": {"class_type": "GRSAILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
+    graph = {"0": config_node(key),
+             "1": {"class_type": "GRSAILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
              "2": {"class_type": "GRSAIBatchImageGenerate", "inputs": {
-                 **inputs(), "api_key": key, "references.reference_1": ["1", 0]}},
+                 **inputs(linked=True), "references.reference_1": ["1", 0]}},
              "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "downstream"}}}
-    workflow = {"nodes": [{"id": 2, "type": "GRSAIBatchImageGenerate",
-                           "widgets_values": [key, "nano-banana-2", "auto", "1K", "fallback", 4, "Clothes"],
+    workflow = {"nodes": [{"id": 0, "type": "GRSAIAPIConfig", "widgets_values": [key, "", "token"]},
+                          {"id": 2, "type": "GRSAIBatchImageGenerate",
+                           "widgets_values": ["nano-banana-2", "auto", "1K", "fallback", 4, "Clothes"],
                            "properties": {"grsai_ui_token": "test-token"}}]}
     executor = execution.PromptExecutor(SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None),
                                        cache_args={"ram": 0, "ram_inactive": 0, "lru": 0})
     await executor.execute_async(copy.deepcopy(graph), "metadata-audit",
                                  extra_data={"extra_pnginfo": {"workflow": workflow}}, execute_outputs=["2", "3"])
     assert executor.success, executor.status_messages
-    internal = list((tmp_path / "output" / "grsai").glob("*/*"))
+    internal = list((tmp_path / "output" / "image_api").glob("*/*"))
     assert len(internal) == 2
     for path in internal:
         assert key not in path.name and key.encode() not in path.read_bytes()
@@ -367,7 +389,7 @@ async def test_test_key_persistence_boundary_in_actual_saved_pngs(host, monkeypa
     assert {node_id: {k: v for k, v in node.items() if k != "is_changed"}
             for node_id, node in embedded_api.items()} == graph
     assert embedded_workflow == workflow
-    assert embedded_api["2"]["inputs"]["api_key"] == key
+    assert embedded_api["0"]["inputs"]["api_key"] == key
     assert json.dumps(embedded_api).count(key) == 1
     assert json.dumps(embedded_workflow).count(key) == 1
     assert key not in json.dumps(events) and key not in caplog.text

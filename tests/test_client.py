@@ -67,6 +67,111 @@ async def test_submit_once_retries_and_order(serve, caplog):
     assert KEY not in caplog.text and "private-prompt" not in caplog.text
 
 
+async def test_optional_progress_and_download_counts_are_reported(serve):
+    cfg = None
+    polls = 0
+
+    async def generate(req):
+        return web.json_response({"id": "task-progress", "status": "running", "progress": 12})
+
+    async def result(req):
+        nonlocal polls
+        polls += 1
+        if polls == 1:
+            return web.json_response({"id": "task-progress", "status": "running", "progress": 65})
+        return web.json_response({
+            "id": "task-progress", "status": "succeeded",
+            "results": [{"url": cfg.base_url + "/image/1"}, {"url": cfg.base_url + "/image/2"}],
+        })
+
+    async def image(req):
+        return web.Response(body=png())
+
+    events = []
+
+    async def progress(stage, value, task_id, details):
+        events.append((stage, value, task_id, details))
+
+    cfg = await serve([
+        ("POST", "/v1/api/generate", generate),
+        ("GET", "/v1/api/result", result),
+        ("GET", "/image/{id}", image),
+    ])
+    await GrsaiClient(cfg, KEY, progress=progress).generate(request(cfg))
+    assert [(stage, value) for stage, value, _, _ in events if stage == "running"] == [
+        ("running", 12), ("running", 65),
+    ]
+    assert [(value, details) for stage, value, _, details in events if stage == "downloading"] == [
+        (0, {"completed": 0, "total": 2}),
+        (50, {"completed": 1, "total": 2}),
+        (100, {"completed": 2, "total": 2}),
+    ]
+
+
+async def test_generation_progress_never_moves_backwards(serve):
+    cfg = None
+    responses = iter([65, 40, None])
+
+    async def generate(req):
+        return web.json_response({"id": "task-progress", "status": "running", "progress": 65})
+
+    async def result(req):
+        value = next(responses)
+        if value is None:
+            return web.json_response({
+                "id": "task-progress", "status": "succeeded",
+                "results": [{"url": cfg.base_url + "/image"}],
+            })
+        return web.json_response({"id": "task-progress", "status": "running", "progress": value})
+
+    async def image(req):
+        return web.Response(body=png())
+
+    values = []
+
+    async def progress(stage, value, *_):
+        if stage == "running":
+            values.append(value)
+
+    cfg = await serve([
+        ("POST", "/v1/api/generate", generate),
+        ("GET", "/v1/api/result", result),
+        ("GET", "/image", image),
+    ])
+    await GrsaiClient(cfg, KEY, progress=progress).generate(request(cfg))
+    assert values == [65, 65, 65]
+
+
+@pytest.mark.parametrize("bad_progress", [None, -1, 101, float("inf"), "50", True])
+async def test_missing_or_invalid_progress_is_indeterminate(serve, bad_progress):
+    cfg = None
+
+    async def generate(req):
+        return web.json_response({"id": "task-progress", "status": "running", "progress": bad_progress})
+
+    async def result(req):
+        return web.json_response({
+            "id": "task-progress", "status": "succeeded",
+            "results": [{"url": cfg.base_url + "/image"}],
+        })
+
+    async def image(req):
+        return web.Response(body=png())
+
+    events = []
+
+    async def progress(stage, value, *_):
+        events.append((stage, value))
+
+    cfg = await serve([
+        ("POST", "/v1/api/generate", generate),
+        ("GET", "/v1/api/result", result),
+        ("GET", "/image", image),
+    ])
+    await GrsaiClient(cfg, KEY, progress=progress).generate(request(cfg))
+    assert ("running", None) in events
+
+
 @pytest.mark.parametrize(
     "payload,status,match",
     [

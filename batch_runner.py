@@ -1,6 +1,7 @@
 """Bounded task lifecycles with submit-once transport and incremental persistence."""
 
 import asyncio
+import logging
 import sys
 import time
 
@@ -9,6 +10,7 @@ import aiohttp
 from .batch_plan import validate_options
 from .batch_storage import BatchStore, StorageError
 from .client import GrsaiClient, cancellable
+from .diagnostics import log_event, new_run_id
 from .errors import GrsaiError, clean_message
 from .images import encode_images
 from .request_builder import build_request, normalize_key
@@ -16,7 +18,7 @@ from .request_builder import build_request, normalize_key
 
 class BatchRunner:
     def __init__(self, config, key, plan, model, parameters, concurrency, prefix, output_root,
-                 check_cancel=lambda: None, progress=None):
+                 check_cancel=lambda: None, progress=None, run_id=None, node_id=None):
         self.config = config
         self.key = normalize_key(key)
         validate_options(concurrency, prefix, self.key)
@@ -25,23 +27,28 @@ class BatchRunner:
         self.plan, self.model, self.parameters = plan, model, parameters
         self.concurrency, self.check_cancel, self.progress = concurrency, check_cancel, progress
         self.store = BatchStore(output_root, plan, model, parameters, concurrency, prefix, self.key)
+        self.run_id = run_id or new_run_id()
+        self.node_id = node_id
         self.submitted = False
         self.cooldown_until = 0
         self.fatal = None
         self.encoded = {}
         self.remaining = {base: len(plan.prompts) for base in range(1, plan.base_count + 1)}
+        self.active = {}
 
     async def _emit(self, stage):
         if self.progress:
             tasks = self.store.state["tasks"]
             success = sum(t["status"] == "succeeded" for t in tasks)
             failed = sum(t["status"] in {"failed", "partial", "submission_unknown"} for t in tasks)
+            active = [self.active[index] for index in sorted(self.active)]
             try:
                 await self.progress({"stage": stage, "base_count": self.plan.base_count,
                                      "prompt_count": len(self.plan.prompts), "total": self.plan.total,
                                      "reference_count": len(self.plan.columns), "model": self.model,
                                      "concurrency": self.concurrency, "completed": success + failed,
-                                     "success": success, "failed": failed,
+                                     "success": success, "failed": failed, "running": len(active),
+                                     "active": active,
                                      "directory": str(self.store.path).replace(self.key, "[redacted]"),
                                      "manifest": str(self.store.manifest).replace(self.key, "[redacted]")})
             except Exception:
@@ -80,6 +87,15 @@ class BatchRunner:
     async def _task(self, spec, sessions):
         client = None
 
+        async def task_progress(stage, value, _task_id, details):
+            self.active[spec.task_index] = {
+                "task_index": spec.task_index,
+                "stage": stage,
+                "progress": value,
+                **details,
+            }
+            await self._emit("running")
+
         async def accepted(task_id, remote_status):
             await self.store.update(spec.task_index, remote_task_id=task_id, remote_status=remote_status,
                                     submitted=True)
@@ -96,8 +112,11 @@ class BatchRunner:
                 return
             self.check_cancel()
             await self.store.update(spec.task_index, status="running")
-            client = GrsaiClient(self.config, self.key, self.check_cancel, accepted=accepted,
-                                 result=result, pressure=self._pressure, sessions=sessions)
+            client = GrsaiClient(self.config, self.key, self.check_cancel, task_progress,
+                                 accepted=accepted, result=result, pressure=self._pressure, sessions=sessions,
+                                 log_context={"run_id": self.run_id, "node_id": self.node_id,
+                                              "batch_id": self.store.path.name,
+                                              "task_index": spec.task_index})
             await client.generate(request)
             await self.store.update(spec.task_index, status="succeeded", remote_status=client.remote_status)
         except GrsaiError as exc:
@@ -110,6 +129,17 @@ class BatchRunner:
             )
             await self.store.update(spec.task_index, status=state, error=error,
                                     remote_status=client.remote_status if client else None)
+            log_event(
+                "batch.task_failed",
+                level=logging.ERROR,
+                run_id=self.run_id,
+                node_id=self.node_id,
+                batch_id=self.store.path.name,
+                task_index=spec.task_index,
+                task_id=client.task_id if client else None,
+                status=state,
+                error=error,
+            )
         except (StorageError, ValueError) as exc:
             self.fatal = clean_message(str(exc), (self.key, *self.plan.prompts))
             raise
@@ -123,6 +153,7 @@ class BatchRunner:
                 except StorageError:
                     if not unwinding:
                         raise
+            self.active.pop(spec.task_index, None)
             self._release(spec.base_index)
         await self._emit("running")
 
@@ -151,6 +182,16 @@ class BatchRunner:
                 await asyncio.gather(*workers, return_exceptions=True)
 
     async def run(self):
+        started = time.monotonic()
+        log_event(
+            "batch.started",
+            run_id=self.run_id,
+            node_id=self.node_id,
+            batch_id=self.store.path.name,
+            model=self.model,
+            tasks=self.plan.total,
+            concurrency=self.concurrency,
+        )
         await self._emit("planned")
         try:
             await cancellable(self._execute(), self.check_cancel)
@@ -167,6 +208,15 @@ class BatchRunner:
             except StorageError:
                 pass
             await self._emit(status)
+            log_event(
+                "batch.interrupted" if interrupted else "batch.failed",
+                level=logging.WARNING if interrupted else logging.ERROR,
+                run_id=self.run_id,
+                node_id=self.node_id,
+                batch_id=self.store.path.name,
+                error=error,
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+            )
             raise
         finally:
             self.encoded.clear()
@@ -176,4 +226,17 @@ class BatchRunner:
         )
         images = await self.store.finish(status, self.fatal)
         await self._emit(status)
+        summary = self.store.state["summary"]
+        log_event(
+            "batch.completed",
+            level=logging.INFO if status == "succeeded" else logging.WARNING,
+            run_id=self.run_id,
+            node_id=self.node_id,
+            batch_id=self.store.path.name,
+            status=status,
+            succeeded=summary["succeeded_tasks"],
+            failed=summary["failed_tasks"],
+            outputs=summary["saved_images"],
+            elapsed_ms=round((time.monotonic() - started) * 1000),
+        )
         return images, str(self.store.manifest)

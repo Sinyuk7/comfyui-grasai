@@ -2,16 +2,18 @@
 
 import asyncio
 import logging
+import time
 
 from comfy_api.latest import io
 
+from .api_config import APIConfigType
+from .api_settings import require_api_config
 from .client import GrsaiClient
 from .config import get_config
+from .diagnostics import log_event, new_run_id
+from .errors import clean_message
 from .images import encode_images
-from .request_builder import build_request, normalize_key
-
-logger = logging.getLogger(__name__)
-
+from .request_builder import build_request
 
 def scalar(value, name):
     if not isinstance(value, list) or len(value) != 1:
@@ -19,15 +21,15 @@ def scalar(value, name):
     return value[0]
 
 
-def normalize_inputs(api_key, model, prompt):
-    key = normalize_key(scalar(api_key, "api_key"))
+def normalize_inputs(api_config, model, prompt):
+    settings = require_api_config(scalar(api_config, "api_config"))
     text = scalar(prompt, "prompt")
     # V3 build_nested_inputs preserves the list wrapper on each dictionary value.
     if not isinstance(model, dict) or "model" not in model:
         raise ValueError("Invalid dynamic model input; update the workflow explicitly.")
     selected = scalar(model["model"], "model")
     parameters = {name: scalar(value, name) for name, value in model.items() if name != "model"}
-    return key, selected, text, parameters
+    return settings, selected, text, parameters
 
 
 class GRSAIImageGenerate(io.ComfyNode):
@@ -45,27 +47,48 @@ class GRSAIImageGenerate(io.ComfyNode):
                 }[name]
                 inputs.append(
                     io.Combo.Input(
-                        name, options=list(parameter.values), default=parameter.default, display_name=label
+                        name,
+                        options=list(parameter.values),
+                        default=parameter.default,
+                        display_name=label,
+                        tooltip=f"{label} supported by the selected model.",
                     )
                 )
             options.append(io.DynamicCombo.Option(model, inputs))
         return io.Schema(
             node_id="GRSAIImageGenerate",
-            display_name="GRSAI Image",
-            category="GRSAI",
+            display_name="Image Generate",
+            category="Image API",
+            description="Generate images with a compatible asynchronous image API.",
             inputs=[
-                io.String.Input(
-                    "api_key",
-                    default="",
-                    multiline=False,
-                    socketless=True,
-                    tooltip="Saved in the workflow, including image metadata when enabled. Not secure key storage.",
+                APIConfigType.Input(
+                    "api_config",
+                    display_name="Config",
+                    tooltip="Connect an API Config node.",
                 ),
-                io.DynamicCombo.Input("model", options=options, extra_dict={"default": config.default_model}),
-                io.String.Input("prompt", default="", multiline=True, dynamic_prompts=False),
-                io.Image.Input("images", optional=True),
+                io.DynamicCombo.Input(
+                    "model",
+                    display_name="Model",
+                    options=options,
+                    extra_dict={"default": config.default_model},
+                    tooltip="Select a model. Availability checks are advisory only.",
+                ),
+                io.String.Input(
+                    "prompt",
+                    display_name="Prompt",
+                    default="",
+                    multiline=True,
+                    dynamic_prompts=False,
+                    tooltip="Instructions for the generated image.",
+                ),
+                io.Image.Input(
+                    "images",
+                    display_name="Images",
+                    optional=True,
+                    tooltip="Optional reference images used together in one request.",
+                ),
             ],
-            outputs=[io.Image.Output("images", is_output_list=True)],
+            outputs=[io.Image.Output("images", display_name="Images", is_output_list=True)],
             hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo],
             is_input_list=True,
             not_idempotent=True,
@@ -76,35 +99,75 @@ class GRSAIImageGenerate(io.ComfyNode):
         return float("nan")
 
     @classmethod
-    async def execute(cls, api_key=None, model=None, prompt=None, images=None):
+    async def execute(cls, api_config=None, model=None, prompt=None, images=None):
         from comfy import model_management
         from .host import execution_ui
 
-        config = get_config()
-        key, selected, text, parameters = normalize_inputs(api_key, model, prompt)
+        settings, selected, text, parameters = normalize_inputs(api_config, model, prompt)
+        config = settings.apply(get_config())
+        run_id = new_run_id()
+        started = time.monotonic()
+        node_id = str(cls.hidden.unique_id)
+        log_event("generation.started", run_id=run_id, node_id=node_id, model=selected)
         # Validate cheap fields before encoding potentially large images.
-        build_request(selected, text, parameters, [], config)
+        client = None
+        ui = None
+        interrupted = False
 
         def check_cancel():
             # Do not consume/reset the global interrupt flag: other async nodes need it too.
             if model_management.processing_interrupted():
                 raise model_management.InterruptProcessingException()
 
-        check_cancel()
-        encoded = encode_images(images, config.transport.image_encoding, check_cancel)
-        request = build_request(selected, text, parameters, encoded, config)
-        ui = execution_ui(cls.hidden, config, key)
-        client = GrsaiClient(config, key, check_cancel, ui.progress)
-        logger.info("GRSAI generation model=%s input_images=%d", selected, len(encoded))
-        interrupted = False
         try:
+            build_request(selected, text, parameters, [], config)
+            check_cancel()
+            encoded = encode_images(images, config.transport.image_encoding, check_cancel)
+            request = build_request(selected, text, parameters, encoded, config)
+            ui = execution_ui(cls.hidden, config, settings.token)
+            client = GrsaiClient(
+                config,
+                settings.api_key,
+                check_cancel,
+                ui.progress,
+                log_context={"run_id": run_id, "node_id": node_id},
+            )
             result = await client.generate(request)
+            log_event(
+                "generation.succeeded",
+                run_id=run_id,
+                node_id=node_id,
+                task_id=client.task_id,
+                outputs=len(result),
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+            )
             return io.NodeOutput(result)
         except (model_management.InterruptProcessingException, asyncio.CancelledError):
             interrupted = True
-            ui.stale()
+            if ui:
+                ui.stale()
+            log_event(
+                "generation.interrupted",
+                level=logging.WARNING,
+                run_id=run_id,
+                node_id=node_id,
+                task_id=client.task_id if client else None,
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+            )
+            raise
+        except Exception as exc:
+            log_event(
+                "generation.failed",
+                level=logging.ERROR,
+                run_id=run_id,
+                node_id=node_id,
+                task_id=client.task_id if client else None,
+                error_type=type(exc).__name__,
+                error=clean_message(str(exc), (settings.api_key, text)),
+                elapsed_ms=round((time.monotonic() - started) * 1000),
+            )
             raise
         finally:
             # Scheduling failure must never replace the generation result or its original error.
-            if client.submitted and not interrupted and not model_management.processing_interrupted():
+            if client and client.submitted and not interrupted and not model_management.processing_interrupted():
                 ui.refresh_balance()

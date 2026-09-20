@@ -34,11 +34,11 @@ def test_invalid_balance_not_zero(payload):
 async def test_balance_http_contract(serve):
     async def balance(req):
         assert "Authorization" not in req.headers
-        assert await req.json() == {"apiKey": "key"}
+        assert await req.json() == {"token": "token"}
         return web.json_response({"code": 0, "data": {"credits": 0}})
 
-    cfg = await serve([("POST", "/client/openapi/getAPIKeyCredits", balance)])
-    assert await query_balance(cfg.base_url, "key") == 0
+    cfg = await serve([("POST", "/client/openapi/getCredits", balance)])
+    assert await query_balance(cfg.base_url, "token") == 0
 
 
 async def test_manager_latest_and_cleanup(monkeypatch):
@@ -46,8 +46,8 @@ async def test_manager_latest_and_cleanup(monkeypatch):
 
     events = []
 
-    async def query(base_url, api_key, check):
-        await asyncio.sleep(0.03 if api_key == "old" else 0.001)
+    async def query(base_url, token, check):
+        await asyncio.sleep(0.03 if token == "old" else 0.001)
         return 7
 
     monkeypatch.setattr(balance, "query_balance", query)

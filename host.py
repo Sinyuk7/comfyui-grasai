@@ -1,14 +1,23 @@
-"""Server-loop ownership for optional UI updates; no credentials reach the browser."""
+"""Server-loop ownership for optional balance and progress updates."""
 
 import logging
 
 from aiohttp import web
 
 from .balance import BalanceManager, query_sequence
-from .config import get_config
+from .config import get_config, normalize_base_url
+from .model_status import query_model_status
 
 logger = logging.getLogger(__name__)
 _manager = None
+_OFFICIAL_BASE_URLS = {"https://grsaiapi.com", "https://grsai.dakka.com.cn"}
+
+
+def model_status_base_url(value, config):
+    base_url = normalize_base_url(value, "Base URL")
+    if base_url not in {*_OFFICIAL_BASE_URLS, config.base_url}:
+        raise ValueError("Model status is disabled for this Base URL.")
+    return base_url
 
 
 def install_host():
@@ -34,6 +43,25 @@ def install_host():
     async def catalog(_request):
         return web.json_response(get_config().public_catalog(), headers={"Cache-Control": "no-store"})
 
+    @server.routes.post("/grsai/model-status")
+    async def model_status(request):
+        try:
+            body = await request.json()
+        except Exception:
+            return web.json_response({"ok": False}, status=400)
+        if not isinstance(body, dict):
+            return web.json_response({"ok": False}, status=400)
+        model = body.get("model")
+        if not isinstance(model, str) or model not in get_config().models:
+            return web.json_response({"ok": False}, status=400)
+        try:
+            base_url = model_status_base_url(body.get("base_url", ""), get_config())
+            available, error = await query_model_status(base_url, model)
+        except Exception:
+            # Availability is advisory. Do not expose upstream diagnostics for failed checks.
+            return web.json_response({"ok": False})
+        return web.json_response({"ok": True, "available": available, "error": error})
+
 
 def _ui_token(extra_pnginfo, node_id):
     if not isinstance(extra_pnginfo, dict):
@@ -51,7 +79,7 @@ def _ui_token(extra_pnginfo, node_id):
 
 
 class ExecutionUI:
-    def __init__(self, hidden, config, api_key):
+    def __init__(self, hidden, config, balance_token):
         from server import PromptServer
 
         self.server = PromptServer.instance
@@ -59,7 +87,7 @@ class ExecutionUI:
         # Capture the client now; server.client_id changes with subsequent queued prompts.
         self.client_id = self.server.client_id
         self.config = config
-        self.api_key = api_key
+        self.balance_token = balance_token
         self.sequence = query_sequence()
         self.token = _ui_token(hidden.extra_pnginfo, self.node_id)
 
@@ -74,9 +102,12 @@ class ExecutionUI:
         except Exception:
             logger.warning("GRSAI UI update unavailable")
 
-    async def progress(self, stage, value, task_id):
-        self.send("grsai.progress", {"stage": stage, "progress": value, "task_id": task_id})
-        if value is not None:
+    async def progress(self, stage, value, task_id, details=None):
+        payload = {"stage": stage, "progress": value, "task_id": task_id, **(details or {})}
+        self.send("grsai.progress", payload)
+        # Download is a separate phase in the node UI. Do not reset the native
+        # generation bar to zero when local result transfer starts.
+        if value is not None and stage in {"running", "succeeded"}:
             try:
                 from comfy_api.latest import ComfyAPI
 
@@ -98,13 +129,15 @@ class ExecutionUI:
 
     def refresh_balance(self):
         try:
-            if _manager is not None:
+            if not self.balance_token:
+                self.send("grsai.balance", {"state": "unavailable"})
+            elif _manager is not None:
                 self.server.loop.call_soon_threadsafe(
                     _manager.start,
                     self.node_id,
                     self.client_id,
                     self.config.base_url,
-                    self.api_key,
+                    self.balance_token,
                     self.sequence,
                     self.token,
                 )
@@ -112,5 +145,5 @@ class ExecutionUI:
             self.send("grsai.balance", {"state": "error", "message": "Balance refresh unavailable."})
 
 
-def execution_ui(hidden, config, api_key):
-    return ExecutionUI(hidden, config, api_key)
+def execution_ui(hidden, config, balance_token):
+    return ExecutionUI(hidden, config, balance_token)

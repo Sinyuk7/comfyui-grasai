@@ -325,6 +325,34 @@ async def test_progress_failure_is_nonfatal(config, tmp_path, monkeypatch):
     assert len((await batch.run())[0]) == 1
 
 
+async def test_child_progress_is_forwarded_with_batch_context(config, tmp_path, monkeypatch):
+    async def generate(self, request):
+        self.submitted = True
+        self.task_id = "remote-1"
+        await self.progress("submitting", None, None, {})
+        await self.progress("running", 42, self.task_id, {})
+        await self.progress("downloading", 50, self.task_id, {"completed": 1, "total": 2})
+        await self.result(torch.zeros(1, 2, 3, 3), 1, 1)
+        self.remote_status = "succeeded"
+        return []
+
+    events = []
+
+    async def display(payload):
+        events.append(payload)
+
+    monkeypatch.setattr(GrsaiClient, "generate", generate)
+    batch = runner(config, tmp_path, plan(1), progress=display)
+    await batch.run()
+    live = [event for event in events if event["stage"] == "running" and event["active"]]
+    assert [event["active"][0]["stage"] for event in live] == [
+        "submitting", "running", "downloading",
+    ]
+    assert live[1]["active"][0]["progress"] == 42
+    assert live[2]["active"][0]["completed"] == 1
+    assert events[-1]["completed"] == 1 and events[-1]["active"] == []
+
+
 async def test_storage_failure_retains_saved_results_and_stops_pending(config, tmp_path, monkeypatch):
     calls = []
 

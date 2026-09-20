@@ -4,12 +4,14 @@ import asyncio
 
 from comfy_api.latest import io
 
+from .api_settings import require_api_config
 from .batch_plan import plan_batch, validate_options
 from .batch_runner import BatchRunner
 from .config import get_config
+from .diagnostics import new_run_id
 from .nodes import GRSAIImageGenerate, scalar
 from .references import load_folder
-from .request_builder import build_request, normalize_key
+from .request_builder import build_request
 
 ReferenceType = io.Custom("GRSAI_REFERENCES")
 
@@ -25,11 +27,12 @@ class GRSAILoadImagesFromFolder(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="GRSAILoadImagesFromFolder", display_name="GRSAI Load Images From Folder",
-            category="GRSAI", is_input_list=True,
+            node_id="GRSAILoadImagesFromFolder", display_name="Load Images From Folder",
+            category="Image API", is_input_list=True,
             inputs=[io.String.Input("folder", default="", display_name="Folder",
                                     tooltip="Directory on the ComfyUI server. Natural filename order; no resizing.")],
-            outputs=[ReferenceType.Output("references"), io.Image.Output("images", is_output_list=True)],
+            outputs=[ReferenceType.Output("references", display_name="References"),
+                     io.Image.Output("images", display_name="Images", is_output_list=True)],
         )
 
     @classmethod
@@ -48,21 +51,26 @@ class GRSAIBatchImageGenerate(io.ComfyNode):
     def define_schema(cls):
         config = get_config()
         shared = GRSAIImageGenerate.define_schema().inputs[:3]
-        for input_, label in zip(shared, ("API Key", "Model", "Prompt")):
+        for input_, label in zip(shared, ("Config", "Model", "Prompt")):
             input_.display_name = label
         template = io.Autogrow.TemplateNames(
             io.MultiType.Input("reference", types=[ReferenceType, io.Image]),
             names=[f"reference_{i}" for i in range(1, config.batch_reference_limit + 1)], min=1,
         )
         return io.Schema(
-            node_id="GRSAIBatchImageGenerate", display_name="GRSAI Batch Image", category="GRSAI",
-            inputs=[io.Autogrow.Input("references", template=template),
+            node_id="GRSAIBatchImageGenerate", display_name="Batch Image Generate", category="Image API",
+            description="Generate and save an ordered set of image and prompt combinations.",
+            inputs=[io.Autogrow.Input("references", display_name="References", template=template,
+                                     tooltip="Connect one or more ordered reference image sources."),
                     io.String.Input("prompts", display_name="Prompts", optional=True, force_input=True,
                                     tooltip="Nonempty STRING list overrides Prompt. Always N x M variants, not pairing."),
                     *shared,
-                    io.Int.Input("max_concurrency", display_name="Max concurrency", default=4, min=2, max=10),
-                    io.String.Input("output_prefix", display_name="Output prefix", default="GRSAI")],
-            outputs=[io.Image.Output("images", is_output_list=True), io.String.Output("manifest")],
+                    io.Int.Input("max_concurrency", display_name="Max Concurrency", default=4, min=2, max=10,
+                                 tooltip="Maximum number of generation tasks running at the same time."),
+                    io.String.Input("output_prefix", display_name="Output Prefix", default="ImageAPI",
+                                    tooltip="Filename prefix for saved images.")],
+            outputs=[io.Image.Output("images", display_name="Images", is_output_list=True),
+                     io.String.Output("manifest", display_name="Manifest")],
             hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo],
             is_input_list=True, is_output_node=True, not_idempotent=True,
         )
@@ -72,13 +80,14 @@ class GRSAIBatchImageGenerate(io.ComfyNode):
         return float("nan")
 
     @classmethod
-    async def execute(cls, references, api_key, model, prompt, max_concurrency, output_prefix, prompts=None):
+    async def execute(cls, references, api_config, model, prompt, max_concurrency, output_prefix, prompts=None):
         import folder_paths
         from comfy import model_management
         from .host import execution_ui
 
-        config = get_config()
-        key = normalize_key(scalar(api_key, "api_key"))
+        settings = require_api_config(scalar(api_config, "api_config"))
+        config = settings.apply(get_config())
+        key = settings.api_key
         if not isinstance(model, dict) or "model" not in model:
             raise ValueError("Invalid dynamic model input; update the workflow explicitly.")
         selected = scalar(model["model"], "model")
@@ -91,9 +100,10 @@ class GRSAIBatchImageGenerate(io.ComfyNode):
         for variant in plan.prompts:
             build_request(selected, variant, parameters, [], config)
         check_cancel()
-        ui = execution_ui(cls.hidden, config, key)
+        ui = execution_ui(cls.hidden, config, settings.token)
         runner = BatchRunner(config, key, plan, selected, parameters, concurrency, prefix,
-                             folder_paths.get_output_directory(), check_cancel, ui.batch_progress)
+                             folder_paths.get_output_directory(), check_cancel, ui.batch_progress,
+                             run_id=new_run_id(), node_id=str(cls.hidden.unique_id))
         interrupted = False
         try:
             images, manifest = await runner.run()

@@ -37,7 +37,7 @@ class BatchStore:
         self.api_key = api_key
         self.lock = asyncio.Lock()
         self.images = {}
-        self.path = Path(output_root) / "grsai" / (
+        self.path = Path(output_root) / "image_api" / (
             datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_") + uuid4().hex[:12]
         )
         try:

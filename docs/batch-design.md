@@ -6,7 +6,7 @@
 
 审查补充：已合并 UI 与 Prompt Variants 规则。Reference 先按 `{1, N}` 配出 N 个 Base Image Groups，再按 Base-major 顺序与 M 个 Prompt Variants 展开成 T=N×M 个任务。Folder Loader 双输出与节点 ID 已确认。`max_concurrency` 采用 INT 2–10，默认 4，约束最终 T 个任务；默认值是本地产品选择，不代表已验证的 Provider 吞吐能力。
 
-本文补充 [单次生成设计](design.md)，不改变现有 `GRSAI Image` 的输入含义、节点 ID 或已保存工作流。批量能力使用独立节点，复用现有配置、请求构造及单次异步生成服务。
+本文补充 [单次生成设计](design.md)。2026-09-18 的干净切换保留内部节点 ID，但将可见名称改为中性英文，并用独立 `API Config` 连接替换生成节点内的 API Key 输入；旧工作流需要手动连接新配置节点。
 
 ## 1. 目标与已确认决策
 
@@ -176,17 +176,18 @@ IMAGE list = [img_1, img_2a, img_2b, img_4]
 
 ## 3. 节点界面
 
-只新增两个节点，全部放在 `GRSAI` 分类，不按 Nano Banana / GPT Image 拆分：
+生成相关节点全部放在 `Image API` 分类，不按 Nano Banana / GPT Image 拆分：
 
 | 显示名称 | 稳定节点 ID | 状态 |
 | --- | --- | --- |
-| GRSAI Image | `GRSAIImageGenerate` | 现有单次节点，不改名或改变语义 |
-| GRSAI Load Images From Folder | `GRSAILoadImagesFromFolder` | 新增，名称与 ID 已确认 |
-| GRSAI Batch Image | `GRSAIBatchImageGenerate` | 新增，名称与 ID 已确认 |
+| Image Generate | `GRSAIImageGenerate` | 单次生成；内部 ID 保持稳定 |
+| Load Images From Folder | `GRSAILoadImagesFromFolder` | 文件夹参考图加载 |
+| Batch Image Generate | `GRSAIBatchImageGenerate` | 批量生成；内部 ID 保持稳定 |
+| API Config | `GRSAIAPIConfig` | API Key、可选 Base URL 和可选 Token |
 
 ### 3.1 文件夹加载节点
 
-显示名称：`GRSAI Load Images From Folder`。
+显示名称：`Load Images From Folder`。
 
 - 输入：ComfyUI 后端可访问的文件夹路径。远程部署时不是浏览器所在电脑的路径。
 - 首版只读取该目录，不递归子目录；隐藏文件、非图片文件忽略。
@@ -212,17 +213,17 @@ Folder Loader 使用路径输入框，不增加加载按钮；跟随工作流执
 
 ### 3.2 批量执行节点
 
-显示名称：`GRSAI Batch Image`。
+显示名称：`Batch Image Generate`。
 
 | 输入 | UI | 行为 |
 | --- | --- | --- |
 | `references` | Reference 1、Reference 2 等动态插口 | 每口同时兼容 GRSAI 自定义图片集合和普通 IMAGE list/batch；图片仍按 `{1, N}` 规则形成 Base |
-| `api_key` | API Key | 与现有节点一致，整批共享 |
+| `api_config` | Config | 连接 `API Config`，整批共享 API Key、Base URL 与 Token |
 | `model` 与模型参数 | 模型下拉及对应参数控件 | 整批共享；Nano 比例/分辨率、GPT 尺寸/质量沿用现有控件 |
 | `prompt` | Prompt 多行 STRING 输入框，可接上游单一 STRING | 默认提示词，Prompts 未连接或为空数组时生效 |
 | `prompts` | Prompts 可选连线插口 | STRING list / Prompt array，非空时覆盖 Prompt；始终表示 Variants |
 | `max_concurrency` | Max concurrency | 显式 INT，min=2、max=10、default=4；前后端均校验，限制最终生成任务，不是平台配额 |
-| `output_prefix` | Output prefix | 例如 `Clothes`，用于保存文件名；建议默认 `GRSAI` |
+| `output_prefix` | Output Prefix | 例如 `Clothes`，用于保存文件名；默认 `ImageAPI` |
 
 固定输出 `images`（平铺的标准 IMAGE list）和 `manifest`（STRING 文件路径，指向包含完整状态与映射的报告）。图片输出遵循第 2.5 节，按任务编号、结果编号排序，不按完成顺序。
 
@@ -244,7 +245,7 @@ Reference 必须连续连接，中间空洞由后端明确报错，不依赖 Aut
 
 ### 3.4 简单进度
 
-优先使用 ComfyUI 原生 progress。至少展示 `Completed / Total`，分母固定为最终任务数 T=N×M，不是 N 或 M。Completed 表示已结束本地处理的生成任务数，包含成功和失败，不等于成功图片数；重连中和仍在运行的任务不计入。中断或全局错误停止提交时，未提交项保持未提交，不为达到 100% 而伪装完成。
+同时使用节点内进度条和 ComfyUI 原生 progress。至少展示 `Completed / Total`，分母固定为最终任务数 T=N×M，不是 N 或 M。Completed 表示已结束本地处理的生成任务数，包含成功和失败，不等于成功图片数；重连中和仍在运行的任务不计入。上游返回可选 `progress` 时，进度条可将活跃任务已报告的比例计入临时显示；缺失时使用不确定动画，不伪造百分比或 ETA。下载是独立阶段并显示 `Downloading n / total`，不让原生生成进度条倒退。中断或全局错误停止提交时，未提交项保持未提交，不为达到 100% 而伪装完成。
 
 ```text
 提交前：计划：10 组图片 × 4 个提示词 = 40 个任务 · 并发 4
@@ -356,7 +357,7 @@ ID 持久化失败按存储级致命错误处理，停止后续提交并保留�
 用户输入 `output_prefix = Clothes` 时，正常单结果任务命名为：
 
 ```text
-<ComfyUI output>/grsai/<批次时间_唯一标识>/
+<ComfyUI output>/image_api/<批次时间_唯一标识>/
   Clothes_001.png
   Clothes_002.png
   Clothes_003.png
@@ -529,7 +530,7 @@ API Key 不进入批量功能产生的 manifest、日志、文件名、PNG 元�
 - [ ] API Key 不进入新增文件名、日志、manifest、内部保存 PNG、CDN 请求或错误；workflow/API workflow/下游嵌入元数据不新增凭据副本，原有风险明确披露。
 - [ ] TaskState 互相隔离；共享 session 时认证不进入 CDN，关闭生命周期正确；独立 session 方案同样正确清理。
 - [ ] 官方模型上限与本地 safety limit 独立校验、清楚标识，超限时零 POST。
-- [ ] Completed/Total 分母为 T，不把重连、未提交或未完成项算作完成；无复杂 Dashboard，最终状态可由 manifest 核对。
+- [x] Completed/Total 分母为 T，不把重连、未提交或未完成项算作完成；节点内进度条支持上游可选百分比、无百分比不确定状态和独立下载阶段；最终状态可由 manifest 核对。
 - [ ] 两个新增节点使用已确认名称和稳定 ID，统一 GRSAI 分类；双 Prompt 入口和双 Folder 输出保存重载正常，不增加 Prompt Mode/数量控件或第三个节点。
 - [ ] 记录 Core、Frontend、comfy_api 版本与 Autogrow 验证范围；本地目录按服务器文件系统解释。
 - [ ] 单次节点原有测试与工作流行为不回退；批量离线验证通过后再申请真实调用授权。

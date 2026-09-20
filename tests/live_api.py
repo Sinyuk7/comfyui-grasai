@@ -160,7 +160,7 @@ async def run(args, key=""):
         started = time.monotonic()
         last = None
 
-        async def progress(stage, value, task_id):
+        async def progress(stage, value, task_id, _details):
             nonlocal last
             record.update(stage=stage, task_id=task_id)
             marker = (stage, value, task_id)

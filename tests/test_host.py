@@ -20,15 +20,20 @@ def host(monkeypatch):
     comfy.cli_args.args.cpu = True
     import execution
     import nodes
+    from grsai.api_config import APIConfig
     from grsai.nodes import GRSAIImageGenerate
 
+    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "GRSAIAPIConfig", APIConfig)
     monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "GRSAIImageGenerate", GRSAIImageGenerate)
     return execution, GRSAIImageGenerate
 
 
-def inputs():
+def inputs(linked=False):
+    from grsai.api_settings import RuntimeAPIConfig
+    from grsai.config import get_config
+
     return {
-        "api_key": "key",
+        "api_config": ["0", 0] if linked else RuntimeAPIConfig("key", get_config().base_url, "token"),
         "prompt": "text",
         "model": "nano-banana-2",
         "model.aspectRatio": "auto",
@@ -149,8 +154,10 @@ async def test_full_executor_cache_and_preview_save(host, monkeypatch, tmp_path)
     server = SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None)
     executor = execution.PromptExecutor(server, cache_args={"ram": 0, "ram_inactive": 0, "lru": 0})
     graph = {
-        "1": {"class_type": "GRSAIImageGenerate", "inputs": inputs()},
-        "2": {"class_type": "GRSAIImageGenerate", "inputs": inputs()},
+        "0": {"class_type": "GRSAIAPIConfig", "inputs": {
+            "api_key": "key", "base_url": "", "token": "token"}},
+        "1": {"class_type": "GRSAIImageGenerate", "inputs": inputs(linked=True)},
+        "2": {"class_type": "GRSAIImageGenerate", "inputs": inputs(linked=True)},
         "3": {"class_type": "PreviewImage", "inputs": {"images": ["1", 0]}},
         "4": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "grsai-test"}},
     }
@@ -211,7 +218,7 @@ async def test_real_node_balance_lifecycle(host, serve, monkeypatch, outcome):
         [
             ("POST", "/v1/api/generate", generate),
             ("GET", "/image", image),
-            ("POST", "/client/openapi/getAPIKeyCredits", balance),
+            ("POST", "/client/openapi/getCredits", balance),
         ]
     )
     manager = BalanceManager(lambda payload, sid: events.append(payload))
@@ -222,8 +229,11 @@ async def test_real_node_balance_lifecycle(host, serve, monkeypatch, outcome):
     )
     monkeypatch.setattr(PromptServer, "instance", server, raising=False)
     flat = inputs()
+    from grsai.api_settings import RuntimeAPIConfig
+
+    flat["api_config"] = RuntimeAPIConfig("key", cfg.base_url, "token")
     if outcome == "invalid":
-        flat["api_key"] = ""
+        flat["api_config"] = None
     values, _, v3_data = execution.get_input_data(
         flat,
         node,

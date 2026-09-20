@@ -1,4 +1,4 @@
-"""Independent short-lived API-key credits query and lifecycle-owned refreshes."""
+"""Independent short-lived account balance query and lifecycle-owned refreshes."""
 
 import asyncio
 import math
@@ -11,11 +11,11 @@ from .client import cancellable
 from .errors import GrsaiError, clean_message
 
 
-def parse_credits(data, api_key):
+def parse_credits(data, token):
     if not isinstance(data, dict):
         raise GrsaiError("Balance response must be a JSON object.")
     if type(data.get("code")) not in (int, float) or data["code"] != 0:
-        raise GrsaiError(clean_message(data.get("msg", "Balance business error."), (api_key,)))
+        raise GrsaiError(clean_message(data.get("msg", "Balance business error."), (token,)))
     credits = data.get("data", {}).get("credits") if isinstance(data.get("data"), dict) else None
     if type(credits) not in (int, float):
         raise GrsaiError("Balance credits must be a finite number.")
@@ -28,12 +28,12 @@ def parse_credits(data, api_key):
     return credits
 
 
-async def query_balance(base_url, api_key, check_cancel=lambda: None):
+async def query_balance(base_url, token, check_cancel=lambda: None):
     async def query():
         async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=15, connect=15)) as session:
             async with session.post(
-                base_url + "/client/openapi/getAPIKeyCredits",
-                json={"apiKey": api_key},
+                base_url + "/client/openapi/getCredits",
+                json={"token": token},
                 allow_redirects=False,
             ) as response:
                 if not 200 <= response.status < 300:
@@ -42,7 +42,7 @@ async def query_balance(base_url, api_key, check_cancel=lambda: None):
                     data = await response.json(content_type=None)
                 except (ValueError, UnicodeError):
                     raise GrsaiError("Balance response is not JSON.") from None
-                return parse_credits(data, api_key)
+                return parse_credits(data, token)
 
     try:
         return await cancellable(query(), check_cancel)
@@ -60,7 +60,7 @@ class BalanceManager:
         self.pending = set()
         self.closed = False
 
-    def start(self, node_id, client_id, base_url, api_key, sequence, ui_token=None):
+    def start(self, node_id, client_id, base_url, token, sequence, ui_token=None):
         if self.closed:
             return
         scope = (client_id, node_id)
@@ -71,7 +71,7 @@ class BalanceManager:
         if self.interrupted():
             self.emit({**payload, "state": "stale"}, client_id)
             return
-        task = asyncio.create_task(self._refresh(payload, client_id, base_url, api_key))
+        task = asyncio.create_task(self._refresh(payload, client_id, base_url, token))
         self.tasks[scope] = task
         self.pending.add(task)
 
@@ -84,20 +84,20 @@ class BalanceManager:
 
         task.add_done_callback(done)
 
-    async def _refresh(self, payload, client_id, base_url, api_key):
+    async def _refresh(self, payload, client_id, base_url, token):
         def check():
             if self.interrupted():
                 raise asyncio.CancelledError()
 
         self.emit({**payload, "state": "loading"}, client_id)
         try:
-            credits = await query_balance(base_url, api_key, check)
+            credits = await query_balance(base_url, token, check)
         except asyncio.CancelledError:
             self.emit({**payload, "state": "stale"}, client_id)
             raise
         except Exception as exc:
             message = str(exc) if isinstance(exc, GrsaiError) else "Balance query failed."
-            self.emit({**payload, "state": "error", "message": clean_message(message, (api_key,))}, client_id)
+            self.emit({**payload, "state": "error", "message": clean_message(message, (token,))}, client_id)
         else:
             self.emit(
                 {

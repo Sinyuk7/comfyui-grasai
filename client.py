@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 import aiohttp
 
 from .config import Config
+from .diagnostics import log_event, new_run_id
 from .errors import GrsaiError, clean_message
 from .images import decode_image
 
@@ -53,7 +54,7 @@ def retry_after(value):
 
 class GrsaiClient:
     def __init__(self, config: Config, api_key, check_cancel=lambda: None, progress=None,
-                 *, accepted=None, result=None, pressure=None, sessions=None):
+                 *, accepted=None, result=None, pressure=None, sessions=None, log_context=None):
         self.config = config
         self.api_key = api_key
         self.check_cancel = check_cancel
@@ -66,14 +67,16 @@ class GrsaiClient:
         self.sessions = sessions
         self.http_status = None
         self.remote_status = None
+        self.generation_progress = None
         self._secrets = (api_key,)
+        self.log_context = dict(log_context or {"run_id": new_run_id()})
 
     def _error(self, message, index=None):
         return GrsaiError(clean_message(message, self._secrets), self.task_id, index)
 
-    async def _notify(self, stage, progress=None):
+    async def _notify(self, stage, progress=None, details=None):
         if self.progress:
-            await self.progress(stage, progress, self.task_id)
+            await self.progress(stage, progress, self.task_id, details or {})
 
     async def _wait(self, seconds):
         await asyncio.sleep(seconds)
@@ -112,6 +115,7 @@ class GrsaiClient:
         if not self.task_id:
             self.task_id = task_id
             logger.info("GRSAI task accepted task_id=%s", task_id)
+            log_event("task.accepted", **self.log_context, task_id=task_id)
 
     def _validate(self, status, data):
         self._remember_id(data)
@@ -206,9 +210,13 @@ class GrsaiClient:
                     or not math.isfinite(progress)
                     or not 0 <= progress <= 100
                 ):
-                    progress = None
+                    progress = self.generation_progress
+                else:
+                    progress = max(progress, self.generation_progress or 0)
+                    self.generation_progress = progress
                 await self._notify("running", progress)
                 await self._wait(t.poll_interval_seconds)
+                retry_count = 0
                 while True:
                     try:
                         status, next_data, delay = await self._json(
@@ -225,10 +233,26 @@ class GrsaiClient:
                         # Explicit terminal task states take precedence over transient HTTP status.
                         if isinstance(next_data, dict) and next_data.get("status") in ("failed", "violation"):
                             self._validate(status, next_data)
+                        retry_count += 1
+                        if retry_count == 1:
+                            log_event(
+                                "poll.reconnecting",
+                                level=logging.WARNING,
+                                **self.log_context,
+                                task_id=self.task_id,
+                                http_status=status,
+                            )
                         await self._notify("reconnecting")
                         await self._wait(max(backoff, delay or 0))
                         backoff = min(backoff * 2, t.retry_backoff_max_seconds)
                         continue
+                    if retry_count:
+                        log_event(
+                            "poll.recovered",
+                            **self.log_context,
+                            task_id=self.task_id,
+                            attempts=retry_count,
+                        )
                     data = next_data
                     state = self._validate(status, data)
                     backoff = min(t.poll_interval_seconds, t.retry_backoff_max_seconds)
@@ -255,12 +279,17 @@ class GrsaiClient:
                     raise self._error("Invalid result URL.", index)
                 urls.append(url)
             images = []
+            await self._notify("downloading", 0, {"completed": 0, "total": len(urls)})
             for index, url in enumerate(urls, 1):
-                await self._notify("downloading", (index - 1) * 100 / len(urls))
                 image = await self._download(cdn, url, index)
                 if self.result:
                     await self.result(image, index, len(urls))
                 images.append(image)
+                await self._notify(
+                    "downloading",
+                    index * 100 / len(urls),
+                    {"completed": index, "total": len(urls)},
+                )
             await self._notify("succeeded", 100)
             return images
 
