@@ -8,6 +8,24 @@ import torch
 from PIL import Image
 
 
+MAX_REFERENCE_IMAGES = 10
+MAX_REFERENCE_IMAGE_BYTES = 10_000_000
+MAX_REFERENCE_TOTAL_BYTES = 50_000_000
+
+
+def validate_reference_files(files):
+    if not isinstance(files, list) or not 1 <= len(files) <= MAX_REFERENCE_IMAGES:
+        raise ValueError("A request requires 1 to 10 reference images.")
+    for index, value in enumerate(files, 1):
+        if not isinstance(value, bytes) or not value:
+            raise ValueError(f"Input image {index} did not encode to PNG bytes.")
+        if len(value) > MAX_REFERENCE_IMAGE_BYTES:
+            raise ValueError(f"Input image {index} exceeds the 10 MB encoded PNG limit.")
+    if sum(map(len, files)) > MAX_REFERENCE_TOTAL_BYTES:
+        raise ValueError("Reference images exceed the 50 MB total encoded PNG limit.")
+    return files
+
+
 def split_images(batches, check_cancel=lambda: None):
     """Validate and return single-image views, preserving list then batch order."""
     if not isinstance(batches, (list, tuple)):
@@ -31,13 +49,11 @@ def split_images(batches, check_cancel=lambda: None):
     return images
 
 
-def encode_images(batches, encoding="base64_png", check_cancel=lambda: None):
+def encode_image_files(batches, check_cancel=lambda: None):
     if batches is None:
         return []
     if not isinstance(batches, (list, tuple)):
         raise ValueError("images must be the ComfyUI list of IMAGE batches.")
-    if encoding not in {"base64_png", "data_url_png"}:
-        raise ValueError("Unsupported image encoding.")
     encoded = []
     for batch_index, batch in enumerate(batches, 1):
         check_cancel()
@@ -68,11 +84,30 @@ def encode_images(batches, encoding="base64_png", check_cancel=lambda: None):
                 )
                 buffer = BytesIO()
                 Image.fromarray(pixels).save(buffer, format="PNG")
-                value = base64.b64encode(buffer.getvalue()).decode("ascii")
+                value = buffer.getvalue()
             except (OSError, ValueError, RuntimeError):
                 raise ValueError(f"Could not encode input image {index}.") from None
-            encoded.append(("data:image/png;base64," if encoding == "data_url_png" else "") + value)
-    return encoded
+            if len(value) > MAX_REFERENCE_IMAGE_BYTES:
+                raise ValueError(f"Input image {index} exceeds the 10 MB encoded PNG limit.")
+            encoded.append(value)
+            if len(encoded) > MAX_REFERENCE_IMAGES:
+                raise ValueError("A request supports at most 10 reference images.")
+            if sum(map(len, encoded)) > MAX_REFERENCE_TOTAL_BYTES:
+                raise ValueError("Reference images exceed the 50 MB total encoded PNG limit.")
+    return validate_reference_files(encoded) if encoded else []
+
+
+def encode_images(batches, encoding="base64_png", check_cancel=lambda: None):
+    if encoding not in {"base64_png", "data_url_png"}:
+        raise ValueError("Unsupported image encoding.")
+    return encode_file_payloads(encode_image_files(batches, check_cancel), encoding)
+
+
+def encode_file_payloads(files, encoding="base64_png"):
+    if encoding not in {"base64_png", "data_url_png"}:
+        raise ValueError("Unsupported image encoding.")
+    prefix = "data:image/png;base64," if encoding == "data_url_png" else ""
+    return [prefix + base64.b64encode(value).decode("ascii") for value in files]
 
 
 def decode_image(data: bytes):

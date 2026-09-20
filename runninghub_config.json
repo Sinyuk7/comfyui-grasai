@@ -1,0 +1,91 @@
+{
+  "schema_version": 1,
+  "base_url": "https://www.runninghub.ai",
+  "default_model": "rh:nano-banana-2-stable",
+  "models": [
+    {
+      "id": "rh:nano-banana-2-economy",
+      "label": "Nano Banana 2 - Economy",
+      "channel": "economy",
+      "endpoint": "/openapi/v2/rhart-image-n-g31-flash/image-to-image",
+      "parameters": {
+        "aspectRatio": {"default": "auto", "options": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "1:4", "4:1", "1:8", "8:1"]},
+        "resolution": {"default": "1k", "options": ["1k", "2k", "4k"]}
+      }
+    },
+    {
+      "id": "rh:nano-banana-2-stable",
+      "label": "Nano Banana 2 - Stable",
+      "channel": "stable",
+      "endpoint": "/openapi/v2/rhart-image-n-g31-flash-official/image-to-image",
+      "parameters": {
+        "aspectRatio": {"default": "auto", "options": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9", "1:4", "4:1", "1:8", "8:1"]},
+        "resolution": {"default": "1k", "options": ["1k", "2k", "4k"]}
+      }
+    },
+    {
+      "id": "rh:nano-banana-pro-economy",
+      "label": "Nano Banana Pro - Economy",
+      "channel": "economy",
+      "endpoint": "/openapi/v2/rhart-image-n-pro/edit",
+      "parameters": {
+        "aspectRatio": {"default": "auto", "options": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]},
+        "resolution": {"default": "1k", "options": ["1k", "2k", "4k"]}
+      }
+    },
+    {
+      "id": "rh:nano-banana-pro-stable",
+      "label": "Nano Banana Pro - Stable",
+      "channel": "stable",
+      "endpoint": "/openapi/v2/rhart-image-n-pro-official/edit",
+      "parameters": {
+        "aspectRatio": {"default": "auto", "options": ["auto", "1:1", "16:9", "9:16", "4:3", "3:4", "3:2", "2:3", "5:4", "4:5", "21:9"]},
+        "resolution": {"default": "1k", "options": ["1k", "2k", "4k"]}
+      }
+    },
+    {
+      "id": "rh:gpt-image-2.5-flare-economy",
+      "label": "GPT Image 2.5 Flare - Economy",
+      "channel": "economy",
+      "endpoint": "/openapi/v2/rhart-image-g-2.5/flare/image-to-image",
+      "parameters": {
+        "aspectRatio": {"default": "16:9", "options": ["1:1", "1:2", "2:1", "1:3", "3:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"]},
+        "resolution": {"default": "1k", "options": ["1k", "2k", "4k"]}
+      }
+    },
+    {
+      "id": "rh:gpt-image-2.5-flare-stable",
+      "label": "GPT Image 2.5 Flare - Stable",
+      "channel": "stable",
+      "endpoint": "/openapi/v2/rhart-image-g-2.5-official-token/flare/edit",
+      "parameters": {
+        "aspectRatio": {"default": "16:9", "options": ["1:1", "1:2", "2:1", "1:3", "3:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"]},
+        "resolution": {"default": "2k", "options": ["1k", "2k", "4k"]},
+        "quality": {"default": "high", "options": ["auto", "low", "medium", "high", "xhigh", "max"]}
+      },
+      "fixed": {"background": "opaque", "outputFormat": "png"}
+    },
+    {
+      "id": "rh:gpt-image-2.5-sunburst-economy",
+      "label": "GPT Image 2.5 Sunburst - Economy",
+      "channel": "economy",
+      "endpoint": "/openapi/v2/rhart-image-g-2.5/sunburst/image-to-image",
+      "parameters": {
+        "aspectRatio": {"default": "16:9", "options": ["1:1", "1:2", "2:1", "1:3", "3:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"]},
+        "resolution": {"default": "1k", "options": ["1k", "2k", "4k"]}
+      }
+    },
+    {
+      "id": "rh:gpt-image-2.5-sunburst-stable",
+      "label": "GPT Image 2.5 Sunburst - Stable",
+      "channel": "stable",
+      "endpoint": "/openapi/v2/rhart-image-g-2.5-official-token/sunburst/edit",
+      "parameters": {
+        "aspectRatio": {"default": "16:9", "options": ["1:1", "1:2", "2:1", "1:3", "3:1", "2:3", "3:2", "3:4", "4:3", "4:5", "5:4", "9:16", "16:9", "21:9", "9:21"]},
+        "resolution": {"default": "2k", "options": ["1k", "2k", "4k"]},
+        "quality": {"default": "high", "options": ["auto", "low", "medium", "high", "xhigh", "max"]}
+      },
+      "fixed": {"background": "opaque", "outputFormat": "png"}
+    }
+  ]
+}

@@ -18,8 +18,8 @@ def test_rotating_diagnostic_log_is_bounded_and_singleton(tmp_path, monkeypatch)
             diagnostics.log_event("test.event", run_id="run-1", index=index, detail="x" * 40)
         logger.handlers[0].flush()
 
-        files = sorted(tmp_path.glob("grsai.log*"))
-        assert path == tmp_path / "grsai.log"
+        files = sorted(tmp_path.glob("image_api.log*"))
+        assert path == tmp_path / "image_api.log"
         assert len(files) == diagnostics.BACKUP_COUNT + 1
         assert all(file.stat().st_size <= diagnostics.MAX_BYTES for file in files)
         assert "test.event" in path.read_text()

@@ -8,17 +8,22 @@ async def comfy_entrypoint():
     from .config import get_config
     from .diagnostics import initialize_diagnostics
     from .host import install_host
-    from .api_config import APIConfig
-    from .nodes import GRSAIImageGenerate
-    from .batch_nodes import GRSAIBatchImageGenerate, GRSAILoadImagesFromFolder
+    from .api_config import ImageAPIConfig
+    from .nodes import ImageGenerate
+    from .batch_nodes import BatchImageGenerate, ImageAPILoadImagesFromFolder
 
-    class GRSAIExtension(ComfyExtension):
+    class ImageAPIExtension(ComfyExtension):
         async def on_load(self):
             get_config()
             initialize_diagnostics()
             install_host()
 
         async def get_node_list(self):
-            return [APIConfig, GRSAIImageGenerate, GRSAILoadImagesFromFolder, GRSAIBatchImageGenerate]
+            return [
+                ImageAPIConfig,
+                ImageGenerate,
+                ImageAPILoadImagesFromFolder,
+                BatchImageGenerate,
+            ]
 
-    return GRSAIExtension()
+    return ImageAPIExtension()

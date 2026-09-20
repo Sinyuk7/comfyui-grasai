@@ -1,6 +1,7 @@
 """Bounded task lifecycles with submit-once transport and incremental persistence."""
 
 import asyncio
+import hashlib
 import logging
 import sys
 import time
@@ -12,27 +13,50 @@ from .batch_storage import BatchStore, StorageError
 from .client import GrsaiClient, cancellable
 from .diagnostics import log_event, new_run_id
 from .errors import GrsaiError, clean_message
-from .images import encode_images
-from .request_builder import build_request, normalize_key
+from .images import encode_file_payloads, encode_image_files, validate_reference_files
+from .request_builder import build_request, build_runninghub_request, normalize_key
+from .runninghub_client import RunningHubClient
+from .runninghub_config import get_runninghub_catalog
 
 
 class BatchRunner:
     def __init__(self, config, key, plan, model, parameters, concurrency, prefix, output_root,
-                 check_cancel=lambda: None, progress=None, run_id=None, node_id=None):
+                 check_cancel=lambda: None, progress=None, run_id=None, node_id=None, provider="grsai"):
         self.config = config
         self.key = normalize_key(key)
         validate_options(concurrency, prefix, self.key)
-        for prompt in plan.prompts:
-            build_request(model, prompt, parameters, [], config)
+        if provider not in {"grsai", "runninghub"}:
+            raise ValueError("Unsupported image API provider.")
+        if provider == "grsai":
+            for prompt in plan.prompts:
+                build_request(model, prompt, parameters, ["pending"], config)
+        else:
+            catalog = get_runninghub_catalog()
+            for prompt in plan.prompts:
+                build_runninghub_request(model, prompt, parameters, ["pending"], catalog)
         self.plan, self.model, self.parameters = plan, model, parameters
+        self.provider = provider
+        self.runninghub_profile = get_runninghub_catalog().profile(model) if provider == "runninghub" else None
         self.concurrency, self.check_cancel, self.progress = concurrency, check_cancel, progress
-        self.store = BatchStore(output_root, plan, model, parameters, concurrency, prefix, self.key)
+        self.store = BatchStore(
+            output_root,
+            plan,
+            model,
+            parameters,
+            concurrency,
+            prefix,
+            self.key,
+            provider,
+            self.runninghub_profile.endpoint if self.runninghub_profile else "/v1/api/generate",
+        )
         self.run_id = run_id or new_run_id()
         self.node_id = node_id
         self.submitted = False
         self.cooldown_until = 0
         self.fatal = None
         self.encoded = {}
+        self.uploaded = {}
+        self.upload_lock = asyncio.Lock()
         self.remaining = {base: len(plan.prompts) for base in range(1, plan.base_count + 1)}
         self.active = {}
 
@@ -71,11 +95,22 @@ class BatchRunner:
             index = self.plan.input_index(col, base)
             cache_key = col, index
             if cache_key not in self.encoded:
-                self.encoded[cache_key] = encode_images(
-                    [column.images[index]], self.config.transport.image_encoding, self.check_cancel
+                self.encoded[cache_key] = encode_image_files(
+                    [column.images[index]], self.check_cancel
                 )[0]
             images.append(self.encoded[cache_key])
         return images
+
+    async def _runninghub_urls(self, client, files):
+        urls = []
+        for index, content in enumerate(files, 1):
+            digest = hashlib.sha256(content).hexdigest()
+            async with self.upload_lock:
+                if digest not in self.uploaded:
+                    api = client.sessions[0]
+                    self.uploaded[digest] = await client.upload_image(api, content, index)
+                urls.append(self.uploaded[digest])
+        return urls
 
     def _release(self, base):
         self.remaining[base] -= 1
@@ -104,19 +139,50 @@ class BatchRunner:
             await self.store.save(spec.task_index, image, index, count)
 
         try:
-            request = build_request(self.model, self.plan.prompts[spec.prompt_index - 1], self.parameters,
-                                    self._images(spec.base_index), self.config)
+            files = self._images(spec.base_index)
+            validate_reference_files(files)
             # Encoding is synchronous. Re-check pressure and fatal state before committing a POST.
             await self._wait_to_submit()
             if self.fatal:
                 return
             self.check_cancel()
             await self.store.update(spec.task_index, status="running")
-            client = GrsaiClient(self.config, self.key, self.check_cancel, task_progress,
-                                 accepted=accepted, result=result, pressure=self._pressure, sessions=sessions,
-                                 log_context={"run_id": self.run_id, "node_id": self.node_id,
-                                              "batch_id": self.store.path.name,
-                                              "task_index": spec.task_index})
+            common = {
+                "accepted": accepted,
+                "result": result,
+                "pressure": self._pressure,
+                "sessions": sessions,
+                "log_context": {"run_id": self.run_id, "node_id": self.node_id,
+                                "batch_id": self.store.path.name, "task_index": spec.task_index},
+            }
+            if self.provider == "runninghub":
+                build_runninghub_request(
+                    self.model,
+                    self.plan.prompts[spec.prompt_index - 1],
+                    self.parameters,
+                    ["pending"] * len(files),
+                    get_runninghub_catalog(),
+                )
+                client = RunningHubClient(
+                    self.config, self.key, self.check_cancel, task_progress,
+                    endpoint=self.runninghub_profile.endpoint, **common
+                )
+                urls = await self._runninghub_urls(client, files)
+                request = build_runninghub_request(
+                    self.model,
+                    self.plan.prompts[spec.prompt_index - 1],
+                    self.parameters,
+                    urls,
+                    get_runninghub_catalog(),
+                )
+            else:
+                encoded = encode_file_payloads(files, self.config.transport.image_encoding)
+                request = build_request(
+                    self.model, self.plan.prompts[spec.prompt_index - 1], self.parameters, encoded, self.config
+                )
+                client = GrsaiClient(
+                    self.config, self.key, self.check_cancel, task_progress, **common
+                )
             await client.generate(request)
             await self.store.update(spec.task_index, status="succeeded", remote_status=client.remote_status)
         except GrsaiError as exc:
@@ -220,6 +286,7 @@ class BatchRunner:
             raise
         finally:
             self.encoded.clear()
+            self.uploaded.clear()
         tasks = self.store.state["tasks"]
         status = "succeeded" if all(t["status"] == "succeeded" for t in tasks) else (
             "partial" if self.store.images else "failed"

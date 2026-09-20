@@ -32,7 +32,8 @@ def sanitized(value, key):
 
 
 class BatchStore:
-    def __init__(self, output_root, plan, model, parameters, concurrency, prefix, api_key):
+    def __init__(self, output_root, plan, model, parameters, concurrency, prefix, api_key,
+                 provider="grsai", endpoint=None):
         self.prefix = prefix
         self.api_key = api_key
         self.lock = asyncio.Lock()
@@ -55,7 +56,8 @@ class BatchStore:
             bases.append({"base_index": base, "references": mapping})
         self.state = {
             "schema_version": 1, "batch_id": self.path.name, "started_at": timestamp(),
-            "finished_at": None, "status": "planned", "model": model, "parameters": dict(parameters),
+            "finished_at": None, "status": "planned", "provider": provider,
+            "model": model, "endpoint": endpoint, "parameters": dict(parameters),
             "reference_count": len(plan.columns), "base_count": plan.base_count,
             "prompt_count": len(plan.prompts), "total_tasks": plan.total,
             "prompt_source": plan.prompt_source, "max_concurrency": concurrency,
@@ -75,7 +77,7 @@ class BatchStore:
     def _atomic(self, destination, write):
         temporary = None
         try:
-            fd, temporary = tempfile.mkstemp(prefix=".grsai-", dir=self.path)
+            fd, temporary = tempfile.mkstemp(prefix=".image-api-", dir=self.path)
             with os.fdopen(fd, "wb") as stream:
                 write(stream)
                 stream.flush()

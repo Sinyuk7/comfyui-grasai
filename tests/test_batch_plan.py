@@ -130,10 +130,13 @@ def test_options_rejected(concurrency, prefix):
 
 def test_optional_config_limits(raw_config):
     raw_config["batch_reference_limit"] = 12
+    with pytest.raises(ConfigError):
+        parse_config(raw_config)
+    raw_config["batch_reference_limit"] = 10
     profile = next(iter(raw_config["profiles"].values()))
     profile.update(max_reference_images=8, reference_limit_source="Documented operator-provided evidence")
     cfg = parse_config(raw_config)
-    assert cfg.batch_reference_limit == 12
+    assert cfg.batch_reference_limit == 10
     assert any(p.max_reference_images == 8 for p in cfg.models.values())
     del profile["reference_limit_source"]
     with pytest.raises(ConfigError):

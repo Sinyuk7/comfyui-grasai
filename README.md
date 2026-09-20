@@ -1,6 +1,6 @@
-# ComfyUI GRSAI
+# ComfyUI Image API
 
-ComfyUI V3 自定义节点，支持 Nano Banana 与 GPT Image 的异步图片生成、多图参考、文件夹批量任务、Prompt Variants、结果保存和账户积分显示。单次规则见 [单次设计](docs/design.md)，批量规则见 [批量设计](docs/batch-design.md)。
+面向图片 API 中转站的 ComfyUI V3 通用节点。目前支持 GRSAI 与 RunningHub，并为后续 Provider 保留统一的节点、界面和执行边界。功能包括基于参考图的异步生成、多图参考、文件夹批量任务、Prompt Variants、结果保存，以及 Provider 支持时的账户积分显示。早期决策背景见 [单次设计](docs/design.md) 与 [批量设计](docs/batch-design.md)，当前产品契约以本文为准。
 
 ## 安装
 
@@ -10,9 +10,11 @@ ComfyUI V3 自定义节点，支持 Nano Banana 与 GPT Image 的异步图片生
 python -m pip install -r requirements.txt
 ```
 
-可选地复制 `grsai_config.example.json` 为 `grsai_config.json`，再修改默认 `base_url`、模型和等待参数。用户配置优先，升级不会覆盖它。工作流中的 `API Config` 节点统一提供 API Key、可选 Base URL 和可选账户 Token；留空 Base URL 时使用 JSON 配置中的默认值。
+可选地复制 `grsai_config.example.json` 为 `grsai_config.json`，再修改 GRSAI 默认 `base_url`、模型和等待参数。用户配置优先，升级不会覆盖它。RunningHub 使用随插件发布并严格校验的 `runninghub_config.json` 固定目录，暂不支持在界面中任意扩展模型。
 
-这是一次干净的输入契约切换：旧工作流中生成节点的直接 API Key 输入不再兼容，需要新增 `API Config` 并连接到生成节点的 `Config` 输入。
+工作流中的 `API Config` 节点提供 `Provider`、API Key、可选 Base URL 和可选账户 Token。Provider 可选 `grsai` 或 `runninghub`；留空 Base URL 时使用对应 Provider 的默认地址。Token 目前仅用于 GRSAI 余额查询，RunningHub 不查询余额。
+
+节点 ID 为 `ImageAPIConfig`、`ImageGenerate`、`BatchImageGenerate` 和 `ImageAPILoadImagesFromFolder`。项目不注册旧的 Provider 专属节点 ID；工作流统一使用通用节点和显式 Provider 配置。
 
 `Image Generate` 应连接到 `Preview Image`、`Save Image` 等下游执行节点；`Batch Image Generate` 自带保存并注册为终端节点，无需额外连接 Save Image 才能执行。
 
@@ -20,7 +22,7 @@ python -m pip install -r requirements.txt
 
 节点位于 `Image API` 分类，界面不绑定特定域名或中转站名称：
 
-- `API Config`：保存本工作流共用的连接信息。API Key 用于生成；Token 只用于账户余额查询；Base URL 可指向兼容的可信域名或中转站。
+- `API Config`：保存本工作流共用的 Provider 和连接信息。API Key 用于生成；Token 只用于 GRSAI 账户余额查询；Base URL 可指向所选 Provider 的兼容可信地址。
 - `Load Images From Folder`：读取 **ComfyUI Server 所在机器**的本地目录，支持 PNG/JPG/JPEG/WEBP，按文件名自然排序，不递归，不缩放或补边。每次工作流执行重新加载；损坏、透明或多帧图片报错，不跳过导致配对错位。
 - `references` 输出同时携带图片与来源文件信息，接入 Batch 的 `Reference 1/2/...`；`images` 是普通 IMAGE list，供 Preview、Upscale 等使用。两个输出共享图片数据。
 - `Batch Image Generate` 的 Reference 同时接受上述集合或普通 IMAGE list/batch。每列长度只允许 1 或共同的 N；单张共享，其他按位置配对。Reference 必须连续连接，中间空洞报错。
@@ -46,17 +48,20 @@ Batch 输出 `images`（成功图片按任务/结果顺序平铺）和 `manifest
 
 每次 Queue 都是新批次，**不会恢复旧批次或自动重生成失败项**。中断只停止本地等待，已经接受的远端任务可能继续计费。下游 Save Image 会额外保存副本，并可能嵌入含 Key 的工作流元数据；内部保存的 PNG 不附带工作流元数据。
 
-本地 `batch_reference_limit` 默认 10，可在配置中设为 1–100（宿主 Autogrow 支持范围）；这是插件本地保护，不是 GRSAI 官方能力。profile 可增加 `max_reference_images` 和配套的 `reference_limit_source`，仅用于有可靠官方依据的上限。默认不编造模型官方上限。完整批量验证与未覆盖边界见 [批量验证记录](docs/batch-verification.md)。
+两个 Provider 使用相同的本地参考图契约：每次必须提供 1–10 张参考图；每张编码后的 PNG 不超过 10,000,000 bytes，总计不超过 50,000,000 bytes。`batch_reference_limit` 即使配置得更高，生成请求也仍以 10 张为上限。完整批量验证与未覆盖边界见 [批量验证记录](docs/batch-verification.md)。
 
 ## 单次节点与通用注意事项
 
-- 默认包含设计确认的七个模型，参数随模型切换；合法参数保留，无效参数切换到新模型默认值。加载旧工作流不会静默修复已删除的模型或参数。
-- 可选 `images` 接收一个批次或图片列表，按列表顺序、批次顺序展开为同一次生成的参考图，不逐张生成。提示词只接受一个字符串，可以连上游字符串节点。
+- GRSAI 保留原有七个模型。RunningHub 固定提供 Nano Banana 2、Nano Banana Pro、GPT Image 2.5 Flare、GPT Image 2.5 Sunburst，各含 Economy 与 Stable，共八个条目；默认是 `Nano Banana 2 - Stable`。
+- GPT Image 2.5 Stable 条目提供 Aspect Ratio、Resolution、Quality，并固定发送 `background=opaque`、`outputFormat=png`。RunningHub 的具体模型由请求 path 决定，不在 payload 中发送模型名。
+- RunningHub 条目与 path 依据官方 [ComfyUI_RH_OpenAPI 模型注册表](https://github.com/HM-RunningHub/ComfyUI_RH_OpenAPI/tree/8f9c858e7e631a1c1c49df0c4defd77fdd690dd4) 固定版本整理；上游变更时应审查后更新本地目录，不自动发现或无限扩展。
+- 参数随模型切换；合法参数保留，无效参数切换到新模型默认值。加载工作流不会静默修复已删除的模型或参数。
+- 必填 `images` 接收一个批次或图片列表，按列表顺序、批次顺序展开为同一次生成的 1–10 张参考图，不逐张生成。提示词只接受一个字符串，可以连上游字符串节点。
 - 输出是 IMAGE list，每项形状 `[1,H,W,3]`，不缩放、不补边。所有结果下载成功后才输出；非不透明 alpha 明确报错。
 - 每次实际执行都创建新任务。POST 不自动重试；查询与下载失败不会触发重新生成。取消只停止本地等待，不能取消远端任务或退款。
 - 默认不设总任务截止时间；单次 HTTP 请求有独立超时。`task_timeout_seconds` 可配置正数，`null` 表示无总截止时间。
-- 提供 Token 时，生成结束后通过 `/client/openapi/getCredits` 独立查询账户积分；不提供 Token 时不查询。余额不阻塞下游、不预先拒绝生成，也不保存为工作流结果。
-- 切换模型时通过 `/client/common/getModelStatus` 做非阻塞状态检查。正常或查询失败时不显示；只有接口明确返回不可用时才提示，且不会阻止生成。为避免打开工作流就访问任意地址，状态查询仅允许官方 Host 或服务器 JSON 中配置的默认 Base URL；其他运行时地址仍可生成，但不自动查询状态。
+- GRSAI 提供 Token 时，生成结束后通过 `/client/openapi/getCredits` 独立查询账户积分；不提供 Token 时不查询。RunningHub 界面显示 `Balance: Not supported`。余额不阻塞下游、不预先拒绝生成，也不保存为工作流结果。
+- GRSAI 切换模型时通过 `/client/common/getModelStatus` 做非阻塞状态检查。正常或查询失败时不显示；只有接口明确返回不可用时才提示，且不会阻止生成。RunningHub 暂无余额和模型状态检查。为避免打开工作流就访问任意地址，GRSAI 状态查询仅允许官方 Host 或服务器 JSON 中配置的默认 Base URL。
 - **API Key 和 Token 都是普通工作流输入**，可能存在于工作流 JSON、历史及 Save Image 的 PNG 元数据中。分享前清理凭据；本插件不是安全密钥存储器。
 - 不提供透明输出、遮罩、seed、上传服务、节点内生成按钮或跨版本兼容承诺。批量调度由独立 Batch 节点提供，不改变单次节点的多图共同参考语义。
 
@@ -64,7 +69,7 @@ Batch 输出 `images`（成功图片按任务/结果顺序平铺）和 `manifest
 
 ## 诊断日志
 
-插件在 ComfyUI 用户目录的 `__grsai/logs/grsai.log` 保存生成、远端任务、重连和失败等关键事件。
+插件在 ComfyUI 用户目录的 `__image_api/logs/image_api.log` 保存生成、远端任务、重连和失败等关键事件。
 日志达到 2 MiB 后自动轮转，保留 4 份旧文件，总量约 10 MiB。日志不记录 API Key、Token、
 明文 Prompt、图片数据或完整请求体；批量任务的完整结果映射仍以各批次的 `manifest.json` 为准。
 
@@ -83,9 +88,9 @@ python tests/browser_smoke.py --url http://127.0.0.1:8197
 python tests/browser_batch_smoke.py --url http://127.0.0.1:8197
 ```
 
-真实 ComfyUI V3 集成测试需要设置 `COMFYUI_PATH`。当前验证基于 ComfyUI `v0.36.0` 与前端 `1.52.7`；普通 pytest 不调用计费或生成服务。显式授权的真实测试入口见下节，首次结果见 [真实测试记录](docs/live-test-2026-09-16.md)。
+真实 ComfyUI V3 集成测试需要设置 `COMFYUI_PATH`。当前验证基于 ComfyUI `v0.36.0` 与前端 `1.52.7`；普通 pytest 不调用计费或生成服务。显式授权的真实测试入口见下节。
 
-前端测试使用本机 Chrome、全新浏览器上下文，仅创建/切换测试节点，不入队生成。验证详情见 [验证记录](docs/verification.md)。
+前端测试使用本机 Chrome、全新浏览器上下文，仅创建/切换测试节点，不入队生成。
 
 ## 真实 API 测试
 

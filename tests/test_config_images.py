@@ -75,16 +75,16 @@ def test_family_allowlist_and_invalid_workflow(config):
             model,
             "text",
             {**params, "prompt": "ignored", "seed": 10, "background": "transparent"},
-            [],
+            ["encoded"],
             config,
         )
         assert set(body) == {"model", "prompt", "images", "replyType", *profile.parameters}
         assert body["prompt"] == "text"
         assert body["replyType"] == "async"
         with pytest.raises(ValueError):
-            build_request(model, "text", {**params, "aspectRatio": "removed-option"}, [], config)
+            build_request(model, "text", {**params, "aspectRatio": "removed-option"}, ["encoded"], config)
     with pytest.raises(ConfigError):
-        build_request("deleted", "text", {}, [], config)
+        build_request("deleted", "text", {}, ["encoded"], config)
     assert normalize_key("  not-a-prefixed-key  ") == "not-a-prefixed-key"
     for key in [" ", None, "a\nb"]:
         with pytest.raises(ValueError):

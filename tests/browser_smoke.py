@@ -10,7 +10,7 @@ from playwright.async_api import async_playwright
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:8197")
-    parser.add_argument("--screenshot", default="/tmp/grsai-node-smoke.png")
+    parser.add_argument("--screenshot", default="/tmp/image-api-node-smoke.png")
     args = parser.parse_args()
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(channel="chrome", headless=True)
@@ -27,10 +27,10 @@ async def main():
                                  "error": "Maintenance" if not available else ""}),
             )
 
-        await page.route("**/grsai/model-status", model_status)
+        await page.route("**/image-api/model-status", model_status)
         await page.goto(args.url)
         await page.wait_for_function(
-            "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.GRSAIImageGenerate)",
+            "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.ImageGenerate)",
             timeout=60000,
         )
         await page.keyboard.press("Escape")
@@ -38,8 +38,8 @@ async def main():
         result = await page.evaluate("""async () => {
           const app = window.app;
           app.graph.clear();
-          const config = window.LiteGraph.createNode('GRSAIAPIConfig');
-          const node = window.LiteGraph.createNode('GRSAIImageGenerate');
+          const config = window.LiteGraph.createNode('ImageAPIConfig');
+          const node = window.LiteGraph.createNode('ImageGenerate');
           app.graph.add(config); app.graph.add(node);
           config.connect(0, node, node.inputs.findIndex(i => i.name === 'api_config'));
           node.pos = [150, 150];
@@ -61,8 +61,8 @@ async def main():
           node.configure(serialized);
           const reloaded = snapshot();
           const { api } = await import('/scripts/api.js');
-          const send = (payload) => api.dispatchEvent(new CustomEvent('grsai.balance', {detail: {node_id: node.id, ...payload}}));
-          const token = node.properties.grsai_ui_token;
+          const send = (payload) => api.dispatchEvent(new CustomEvent('image-api.balance', {detail: {node_id: node.id, ...payload}}));
+          const token = node.properties.image_api_ui_token;
           send({ui_token: token, sequence: 10, state: 'ready', credits: 0, queried_at: '2026-09-16T00:00:00Z'});
           const zero = get('balance').value;
           send({ui_token: token, sequence: 9, state: 'error'});
@@ -72,14 +72,14 @@ async def main():
           send({ui_token: token, sequence: 11, state: 'ready', credits: 999, queried_at: '2026-09-16T00:00:00Z'});
           const afterConfigChange = get('balance').value;
           const invalid = node.serialize();
-          invalid.properties.grsai_selection.parameters.aspectRatio = 'deleted-option';
+          invalid.properties.image_api_selection.parameters.aspectRatio = 'deleted-option';
           node.configure(invalid);
           const invalidParameter = get('model.aspectRatio').value;
-          invalid.properties.grsai_selection.model = 'deleted-model';
+          invalid.properties.image_api_selection.model = 'deleted-model';
           node.configure(invalid);
           const deletedModel = {model: get('model').value, status: get('status').value};
           node.configure(serialized);
-          window.grsaiTestNode = node;
+          window.imageApiTestNode = node;
           app.canvas.ds.scale = 1;
           app.canvas.ds.offset = [0, 0];
           app.canvas.setDirty(true, true);
@@ -117,7 +117,7 @@ async def main():
         await option.click()
         prompt = await page.evaluate("app.graphToPrompt()")
         generated = next(value for value in prompt["output"].values()
-                         if value["class_type"] == "GRSAIImageGenerate")
+                         if value["class_type"] == "ImageGenerate")
         assert generated["inputs"]["model.aspectRatio"] == "1024x1024"
         await page.screenshot(path=args.screenshot, full_page=True)
         await browser.close()

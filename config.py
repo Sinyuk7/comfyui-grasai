@@ -123,8 +123,8 @@ def parse_config(raw) -> Config:
     }
     _object(raw, fields | {"batch_reference_limit"}, fields, "configuration")
     local_limit = raw.get("batch_reference_limit", 10)
-    if type(local_limit) is not int or not 1 <= local_limit <= 100:
-        raise ConfigError("batch_reference_limit must be an integer from 1 to 100 (local safety limit).")
+    if type(local_limit) is not int or not 1 <= local_limit <= 10:
+        raise ConfigError("batch_reference_limit must be an integer from 1 to 10 (shared provider limit).")
     if type(raw["schema_version"]) is not int or raw["schema_version"] != 1:
         raise ConfigError("Unsupported schema_version; expected 1.")
     base = normalize_base_url(raw["base_url"])

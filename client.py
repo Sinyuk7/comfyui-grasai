@@ -142,8 +142,10 @@ class GrsaiClient:
         previous = self.task_id
         self._remember_id(data)
         state = data.get("status") if isinstance(data, dict) else None
-        if isinstance(state, str) and state in {"running", "succeeded", "failed", "violation"}:
-            self.remote_status = data["status"]
+        if isinstance(state, str) and state.lower() in {
+            "create", "queued", "running", "succeeded", "success", "failed", "cancel", "violation"
+        }:
+            self.remote_status = state
         # This is an awaited business boundary, not a best-effort UI notification.
         if self.task_id and previous is None and self.accepted:
             await self.accepted(self.task_id, self.remote_status)

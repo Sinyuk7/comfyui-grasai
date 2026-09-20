@@ -9,10 +9,7 @@
 - [批量实现验证](batch-verification.md)：实现选择、离线与真实宿主/前端测试结果、复现方式和未验证边界。
 - [接口核查与排查笔记](api-notes.md)：三个指定接口的差异、文档冲突与待实测项。
 - [API Key 余额接口](references/user-provided-api-key-credits.md)：用户补充的契约、官方域名核查与自动刷新设计依据。
-- [参考项目核查](reference-project-review.md)：用户提供的 ComfyUI-GrsAI 代码证据、可借鉴点与不直接移植的行为。
 - [运行配置示例](../grsai_config.example.json)：运行时默认配置；`examples/` 内保留原设计样例。
-- [验证记录](verification.md)：测试环境、已验证行为和真实 API 联调边界。
-- [首次真实换装测试](live-test-2026-09-16.md)：输入版本、实际参数、任务 ID、输出尺寸与视觉检查。
 - [资料来源与本地快照](references/README.md)：原始资料、获取时间及完整性校验。
 
 查接口问题时，先看 `api-notes.md`，再对照快照内对应参数；接口变化后新增快照，保留旧版本用于比较。

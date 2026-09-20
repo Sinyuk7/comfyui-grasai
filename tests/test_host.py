@@ -20,12 +20,23 @@ def host(monkeypatch):
     comfy.cli_args.args.cpu = True
     import execution
     import nodes
-    from grsai.api_config import APIConfig
-    from grsai.nodes import GRSAIImageGenerate
+    from comfy_api.latest import io
+    from grsai.api_config import ImageAPIConfig
+    from grsai.nodes import ImageGenerate
 
-    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "GRSAIAPIConfig", APIConfig)
-    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "GRSAIImageGenerate", GRSAIImageGenerate)
-    return execution, GRSAIImageGenerate
+    class TestImage(io.ComfyNode):
+        @classmethod
+        def define_schema(cls):
+            return io.Schema(node_id="ImageAPITestImage", inputs=[], outputs=[io.Image.Output()])
+
+        @classmethod
+        def execute(cls):
+            return io.NodeOutput(torch.zeros(1, 2, 2, 3))
+
+    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "ImageAPIConfig", ImageAPIConfig)
+    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "ImageGenerate", ImageGenerate)
+    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "ImageAPITestImage", TestImage)
+    return execution, ImageGenerate
 
 
 def inputs(linked=False):
@@ -38,6 +49,7 @@ def inputs(linked=False):
         "model": "nano-banana-2",
         "model.aspectRatio": "auto",
         "model.imageSize": "1K",
+        "images": ["9", 0] if linked else torch.zeros(1, 2, 2, 3),
     }
 
 
@@ -54,10 +66,22 @@ def test_real_schema_and_list_wrapping(host):
     assert nested["model"] == {"model": ["nano-banana-2"], "aspectRatio": ["auto"], "imageSize": ["1K"]}
 
 
+async def test_extension_registers_only_generic_node_ids(host):
+    from grsai import comfy_entrypoint
+
+    extension = await comfy_entrypoint()
+    node_ids = [node.define_schema().node_id for node in await extension.get_node_list()]
+    assert node_ids == [
+        "ImageAPIConfig",
+        "ImageGenerate",
+        "ImageAPILoadImagesFromFolder",
+        "BatchImageGenerate",
+    ]
+
+
 @pytest.mark.parametrize(
     "batches,count",
     [
-        (None, 0),
         ([torch.zeros(1, 3, 4, 3)], 1),
         ([torch.zeros(2, 3, 4, 3)], 2),
         ([torch.zeros(2, 3, 4, 3), torch.zeros(1, 5, 2, 3)], 3),
@@ -79,8 +103,7 @@ async def test_real_host_invokes_once_and_outputs_all(host, monkeypatch, batches
     monkeypatch.setattr(adapter, "execution_ui", lambda *_: ui)
     monkeypatch.setattr(GrsaiClient, "generate", generate)
     values, _, v3_data = execution.get_input_data(inputs(), node, "17")
-    if batches is not None:
-        values["images"] = batches
+    values["images"] = batches
     output, _, _, pending = await execution.get_output_data("prompt", "17", node(), values, v3_data=v3_data)
     if pending:
         results = await asyncio.gather(*output)
@@ -111,8 +134,8 @@ async def test_fingerprints_and_distinct_node_cache_keys(host):
     assert first != second
     prompt = DynamicPrompt(
         {
-            "1": {"class_type": "GRSAIImageGenerate", "inputs": inputs()},
-            "2": {"class_type": "GRSAIImageGenerate", "inputs": inputs()},
+            "1": {"class_type": "ImageGenerate", "inputs": inputs()},
+            "2": {"class_type": "ImageGenerate", "inputs": inputs()},
         }
     )
 
@@ -154,10 +177,11 @@ async def test_full_executor_cache_and_preview_save(host, monkeypatch, tmp_path)
     server = SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None)
     executor = execution.PromptExecutor(server, cache_args={"ram": 0, "ram_inactive": 0, "lru": 0})
     graph = {
-        "0": {"class_type": "GRSAIAPIConfig", "inputs": {
-            "api_key": "key", "base_url": "", "token": "token"}},
-        "1": {"class_type": "GRSAIImageGenerate", "inputs": inputs(linked=True)},
-        "2": {"class_type": "GRSAIImageGenerate", "inputs": inputs(linked=True)},
+        "0": {"class_type": "ImageAPIConfig", "inputs": {
+            "api_key": "key", "base_url": "", "token": "token", "provider": "grsai"}},
+        "9": {"class_type": "ImageAPITestImage", "inputs": {}},
+        "1": {"class_type": "ImageGenerate", "inputs": inputs(linked=True)},
+        "2": {"class_type": "ImageGenerate", "inputs": inputs(linked=True)},
         "3": {"class_type": "PreviewImage", "inputs": {"images": ["1", 0]}},
         "4": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "grsai-test"}},
     }
@@ -239,7 +263,7 @@ async def test_real_node_balance_lifecycle(host, serve, monkeypatch, outcome):
         node,
         "17",
         extra_data={
-            "extra_pnginfo": {"workflow": {"nodes": [{"id": 17, "properties": {"grsai_ui_token": "token"}}]}}
+            "extra_pnginfo": {"workflow": {"nodes": [{"id": 17, "properties": {"image_api_ui_token": "token"}}]}}
         },
     )
 

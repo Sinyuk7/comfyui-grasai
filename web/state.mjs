@@ -19,6 +19,7 @@ export function balanceText(payload) {
     case "stale": return "Balance may be outdated";
     case "error": return "Balance unavailable";
     case "unavailable": return "Balance: Token not set";
+    case "unsupported": return "Balance: Not supported";
     default: return "Balance: Not checked";
   }
 }

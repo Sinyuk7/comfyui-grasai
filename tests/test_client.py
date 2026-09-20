@@ -15,7 +15,7 @@ KEY = "test-secret-key"
 
 def request(config):
     return build_request(
-        "nano-banana-2", "private-prompt", {"aspectRatio": "auto", "imageSize": "1K"}, [], config
+        "nano-banana-2", "private-prompt", {"aspectRatio": "auto", "imageSize": "1K"}, ["encoded"], config
     )
 
 

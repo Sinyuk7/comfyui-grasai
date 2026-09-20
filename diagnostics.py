@@ -6,10 +6,10 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from uuid import uuid4
 
-LOG_NAME = "grsai.diagnostics"
+LOG_NAME = "image_api.diagnostics"
 MAX_BYTES = 2 * 1024 * 1024
 BACKUP_COUNT = 4
-_HANDLER_MARKER = "_grsai_diagnostic_handler"
+_HANDLER_MARKER = "_image_api_diagnostic_handler"
 
 
 def _default_directory():
@@ -17,8 +17,8 @@ def _default_directory():
 
     system_directory = getattr(folder_paths, "get_system_user_directory", None)
     if system_directory:
-        return Path(system_directory("grsai")) / "logs"
-    return Path(folder_paths.get_user_directory()) / "__grsai" / "logs"
+        return Path(system_directory("image_api")) / "logs"
+    return Path(folder_paths.get_user_directory()) / "__image_api" / "logs"
 
 
 def initialize_diagnostics(directory=None):
@@ -31,7 +31,7 @@ def initialize_diagnostics(directory=None):
     path = Path(directory) if directory is not None else _default_directory()
     try:
         path.mkdir(parents=True, exist_ok=True, mode=0o700)
-        destination = path / "grsai.log"
+        destination = path / "image_api.log"
         handler = RotatingFileHandler(
             destination,
             maxBytes=MAX_BYTES,
@@ -44,10 +44,10 @@ def initialize_diagnostics(directory=None):
         logger.addHandler(handler)
         logger.setLevel(logging.INFO)
         logger.propagate = True
-        logger.info("GRSAI diagnostic log: %s", destination)
+        logger.info("Image API diagnostic log: %s", destination)
         return destination
     except OSError as exc:
-        logging.getLogger(__name__).warning("GRSAI diagnostic log unavailable: %s", exc)
+        logging.getLogger(__name__).warning("Image API diagnostic log unavailable: %s", exc)
         return None
 
 

@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-grasai"
 version = "0.1.0"
-description = "ComfyUI V3 nodes for GRSAI image generation, folder loading and bounded batch execution"
+description = "Provider-neutral ComfyUI V3 nodes for reference-based image generation and bounded batches"
 requires-python = ">=3.10"
 license = {file = "LICENSE"}
 dependencies = ["aiohttp>=3.11.8", "numpy>=1.25", "Pillow>=10", "torch>=2"]

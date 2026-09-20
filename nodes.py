@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import time
-
 from comfy_api.latest import io
 
 from .api_config import APIConfigType
@@ -12,8 +11,10 @@ from .client import GrsaiClient
 from .config import get_config
 from .diagnostics import log_event, new_run_id
 from .errors import clean_message
-from .images import encode_images
-from .request_builder import build_request
+from .images import encode_file_payloads, encode_image_files, validate_reference_files
+from .request_builder import build_request, build_runninghub_request
+from .runninghub_client import RunningHubClient
+from .runninghub_config import get_runninghub_catalog
 
 def scalar(value, name):
     if not isinstance(value, list) or len(value) != 1:
@@ -32,17 +33,32 @@ def normalize_inputs(api_config, model, prompt):
     return settings, selected, text, parameters
 
 
-class GRSAIImageGenerate(io.ComfyNode):
+def provider_profile(settings, model):
+    if settings.provider == "grsai":
+        if model.startswith("rh:"):
+            raise ValueError("Select a GRSAI model for the connected API Config.")
+        return get_config().profile(model)
+    if not model.startswith("rh:"):
+        raise ValueError("Select a RunningHub model for the connected API Config.")
+    return get_runninghub_catalog().profile(model)
+
+
+def model_profiles():
+    return {**get_config().models, **get_runninghub_catalog().models}
+
+
+class ImageGenerate(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         config = get_config()
         options = []
-        for model, profile in config.models.items():
+        for model, profile in model_profiles().items():
             inputs = []
             for name, parameter in profile.parameters.items():
                 label = {
-                    "aspectRatio": "Aspect ratio" if profile.family == "nano_banana" else "Image size",
+                    "aspectRatio": "Aspect ratio" if profile.family in {"nano_banana", "runninghub"} else "Image size",
                     "imageSize": "Resolution",
+                    "resolution": "Resolution",
                     "quality": "Quality",
                 }[name]
                 inputs.append(
@@ -56,10 +72,11 @@ class GRSAIImageGenerate(io.ComfyNode):
                 )
             options.append(io.DynamicCombo.Option(model, inputs))
         return io.Schema(
-            node_id="GRSAIImageGenerate",
+            node_id="ImageGenerate",
             display_name="Image Generate",
             category="Image API",
             description="Generate images with a compatible asynchronous image API.",
+            search_aliases=["GRSAI Image Generate", "RunningHub Image Generate"],
             inputs=[
                 APIConfigType.Input(
                     "api_config",
@@ -84,8 +101,7 @@ class GRSAIImageGenerate(io.ComfyNode):
                 io.Image.Input(
                     "images",
                     display_name="Images",
-                    optional=True,
-                    tooltip="Optional reference images used together in one request.",
+                    tooltip="Required reference images used together in one request (1-10 images).",
                 ),
             ],
             outputs=[io.Image.Output("images", display_name="Images", is_output_list=True)],
@@ -105,6 +121,7 @@ class GRSAIImageGenerate(io.ComfyNode):
 
         settings, selected, text, parameters = normalize_inputs(api_config, model, prompt)
         config = settings.apply(get_config())
+        profile = provider_profile(settings, selected)
         run_id = new_run_id()
         started = time.monotonic()
         node_id = str(cls.hidden.unique_id)
@@ -120,18 +137,38 @@ class GRSAIImageGenerate(io.ComfyNode):
                 raise model_management.InterruptProcessingException()
 
         try:
-            build_request(selected, text, parameters, [], config)
             check_cancel()
-            encoded = encode_images(images, config.transport.image_encoding, check_cancel)
-            request = build_request(selected, text, parameters, encoded, config)
-            ui = execution_ui(cls.hidden, config, settings.token)
-            client = GrsaiClient(
-                config,
-                settings.api_key,
-                check_cancel,
-                ui.progress,
-                log_context={"run_id": run_id, "node_id": node_id},
-            )
+            files = encode_image_files(images, check_cancel)
+            if not files:
+                raise ValueError("Connect 1 to 10 reference images.")
+            validate_reference_files(files)
+            ui = execution_ui(cls.hidden, config, settings.token, settings.provider)
+            if settings.provider == "runninghub":
+                build_runninghub_request(
+                    selected, text, parameters, ["pending"] * len(files), get_runninghub_catalog()
+                )
+                client = RunningHubClient(
+                    config,
+                    settings.api_key,
+                    check_cancel,
+                    ui.progress,
+                    endpoint=profile.endpoint,
+                    log_context={"run_id": run_id, "node_id": node_id},
+                )
+                urls = await client.upload_images(files)
+                request = build_runninghub_request(
+                    selected, text, parameters, urls, get_runninghub_catalog()
+                )
+            else:
+                encoded = encode_file_payloads(files, config.transport.image_encoding)
+                request = build_request(selected, text, parameters, encoded, config)
+                client = GrsaiClient(
+                    config,
+                    settings.api_key,
+                    check_cancel,
+                    ui.progress,
+                    log_context={"run_id": run_id, "node_id": node_id},
+                )
             result = await client.generate(request)
             log_event(
                 "generation.succeeded",

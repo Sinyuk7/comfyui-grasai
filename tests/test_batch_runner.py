@@ -240,7 +240,7 @@ async def test_manifest_single_writer_and_unique_batch_paths(config, tmp_path):
     await asyncio.gather(*(first.store.update(i, remote_task_id=f"id-{i}") for i in range(1, 11)))
     data = json.loads(first.store.manifest.read_text())
     assert [t["remote_task_id"] for t in data["tasks"]] == [f"id-{i}" for i in range(1, 11)]
-    assert not list(first.store.path.glob(".grsai-*"))
+    assert not list(first.store.path.glob(".image-api-*"))
 
 
 async def test_client_id_callback_is_awaited_before_polling(serve):
@@ -290,7 +290,7 @@ async def test_base_encoding_is_reused_across_variants(config, tmp_path, monkeyp
     from grsai import batch_runner
 
     encoded = []
-    encode = batch_runner.encode_images
+    encode = batch_runner.encode_image_files
 
     def count(*args):
         encoded.append(1)
@@ -303,7 +303,7 @@ async def test_base_encoding_is_reused_across_variants(config, tmp_path, monkeyp
         await self.result(image, 1, 1)
         return [image]
 
-    monkeypatch.setattr(batch_runner, "encode_images", count)
+    monkeypatch.setattr(batch_runner, "encode_image_files", count)
     monkeypatch.setattr(GrsaiClient, "generate", generate)
     batch = runner(config, tmp_path, plan(3, ["one", "two", "three", "four"]))
     images, _ = await batch.run()

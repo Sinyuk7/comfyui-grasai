@@ -22,7 +22,7 @@ def key_paths(value, key, path=()):
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--url", default="http://127.0.0.1:8197")
-    parser.add_argument("--screenshot", default="/tmp/grsai-batch-smoke.png")
+    parser.add_argument("--screenshot", default="/tmp/image-api-batch-smoke.png")
     args = parser.parse_args()
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(channel="chrome", headless=True)
@@ -40,13 +40,13 @@ async def main():
 
         await page.route("**/prompt", prevent_queue)
         await page.route("**/api/prompt", prevent_queue)
-        await page.route("**/grsai/model-status", lambda route: route.fulfill(
+        await page.route("**/image-api/model-status", lambda route: route.fulfill(
             status=200, content_type="application/json",
             body='{"ok":true,"available":true,"error":""}',
         ))
         await page.goto(args.url)
         await page.wait_for_function(
-            "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.GRSAIBatchImageGenerate)",
+            "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.BatchImageGenerate)",
             timeout=60000,
         )
         await page.keyboard.press("Escape")
@@ -56,11 +56,11 @@ async def main():
             const node = window.LiteGraph.createNode(name); app.graph.add(node); return node;
           };
           app.graph.clear();
-          const config = make('GRSAIAPIConfig');
-          const folder = make('GRSAILoadImagesFromFolder');
-          const second = make('GRSAILoadImagesFromFolder');
-          const third = make('GRSAILoadImagesFromFolder');
-          const batch = make('GRSAIBatchImageGenerate');
+          const config = make('ImageAPIConfig');
+          const folder = make('ImageAPILoadImagesFromFolder');
+          const second = make('ImageAPILoadImagesFromFolder');
+          const third = make('ImageAPILoadImagesFromFolder');
+          const batch = make('BatchImageGenerate');
           config.connect(0, batch, batch.inputs.findIndex(i => i.name === 'api_config'));
           const promptsNode = make('PrimitiveStringMultiline');
           promptsNode.widgets.find(w => w.name === 'value').value = 'Standing fashion portrait';
@@ -89,14 +89,14 @@ async def main():
           const quality = get('model.quality').value;
           set('model','nano-banana-2');
           const { api } = await import('/scripts/api.js');
-          api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
-            node_id:batch.id,ui_token:batch.properties.grsai_ui_token,sequence:100,
+          api.dispatchEvent(new CustomEvent('image-api.batch', {detail: {
+            node_id:batch.id,ui_token:batch.properties.image_api_ui_token,sequence:100,
             stage:'planned',base_count:10,prompt_count:4,total:40,concurrency:4,
             directory:'output/image_api/example',completed:0,success:0,failed:0
           }}));
           const status=get('status').value;
-          api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
-            node_id:batch.id,ui_token:batch.properties.grsai_ui_token,sequence:101,
+          api.dispatchEvent(new CustomEvent('image-api.batch', {detail: {
+            node_id:batch.id,ui_token:batch.properties.image_api_ui_token,sequence:101,
             stage:'running',base_count:10,prompt_count:4,total:40,concurrency:4,
             directory:'output/image_api/example',completed:17,success:16,failed:1,running:1,
             active:[{task_index:18,stage:'running',progress:42}]
@@ -105,32 +105,32 @@ async def main():
           const progressKnown={label:progressWidget.element.textContent,
             indeterminate:progressWidget.element.dataset.indeterminate,
             width:progressWidget.element.firstElementChild.firstElementChild.style.width};
-          api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
-            node_id:batch.id,ui_token:batch.properties.grsai_ui_token,sequence:102,
+          api.dispatchEvent(new CustomEvent('image-api.batch', {detail: {
+            node_id:batch.id,ui_token:batch.properties.image_api_ui_token,sequence:102,
             stage:'running',base_count:1,prompt_count:1,total:1,concurrency:1,
             directory:'output/image_api/example',completed:0,success:0,failed:0,running:1,
             active:[{task_index:1,stage:'running',progress:null}]
           }}));
           const progressUnknown={label:progressWidget.element.textContent,
             indeterminate:progressWidget.element.dataset.indeterminate};
-          folder.onExecuted({grsai_files:['001_person.png']});
-          second.onExecuted({grsai_files:['001_shirt.png','002_shirt.png']});
+          folder.onExecuted({image_api_files:['001_person.png']});
+          second.onExecuted({image_api_files:['001_shirt.png','002_shirt.png']});
           const widgets=batch.widgets.map(w=>({name:w.name,value:w.value}));
           const serialized=app.graph.serialize();
           await app.loadGraphData(serialized);
-          const reloaded=app.graph._nodes.find(n=>n.comfyClass==='GRSAIBatchImageGenerate');
+          const reloaded=app.graph._nodes.find(n=>n.comfyClass==='BatchImageGenerate');
           const reloadedInputs=reloaded.inputs.map(i=>({name:i.name,link:i.link}));
           const prefix=reloaded.widgets.find(w=>w.name==='output_prefix').value;
           const apiPrompt=await app.graphToPrompt();
-          const batchPrompt=Object.values(apiPrompt.output).find(n=>n.class_type==='GRSAIBatchImageGenerate');
-          const reloadedConfig=app.graph._nodes.find(n=>n.comfyClass==='GRSAIAPIConfig');
+          const batchPrompt=Object.values(apiPrompt.output).find(n=>n.class_type==='BatchImageGenerate');
+          const reloadedConfig=app.graph._nodes.find(n=>n.comfyClass==='ImageAPIConfig');
           const reloadedKey=reloadedConfig.widgets.find(w=>w.name==='api_key').value;
           const reloadedFallback=reloaded.widgets.find(w=>w.name==='prompt').value;
           const promptsLink=batchPrompt.inputs.prompts;
           const connectedPrompt=apiPrompt.output[promptsLink[0]];
           reloaded.disconnectInput(reloaded.inputs.findIndex(i=>i.name==='prompts'));
           const disconnectedPrompt=Object.values((await app.graphToPrompt()).output)
-            .find(n=>n.class_type==='GRSAIBatchImageGenerate');
+            .find(n=>n.class_type==='BatchImageGenerate');
           const restoredPrompts=app.graph._nodes.find(n=>n.comfyClass==='PrimitiveStringMultiline');
           restoredPrompts.connect(0,reloaded,reloaded.inputs.findIndex(i=>i.name==='prompts'));
           const restoredKey=reloadedConfig.widgets.find(w=>w.name==='api_key');
@@ -139,13 +139,13 @@ async def main():
           app.canvas.ds.offset=[0,0];
           reloaded.pos=[620,110];
           reloaded.size=[760,620];
-          api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
-            node_id:reloaded.id,ui_token:reloaded.properties.grsai_ui_token,sequence:101,
+          api.dispatchEvent(new CustomEvent('image-api.batch', {detail: {
+            node_id:reloaded.id,ui_token:reloaded.properties.image_api_ui_token,sequence:101,
             stage:'planned',base_count:10,prompt_count:4,total:40,concurrency:4,
             directory:'output/image_api/example',completed:0,success:0,failed:0
           }}));
-          for(const n of app.graph._nodes.filter(n=>n.comfyClass==='GRSAILoadImagesFromFolder')) {
-            n.onExecuted({grsai_files:['001.png','002.png']});
+          for(const n of app.graph._nodes.filter(n=>n.comfyClass==='ImageAPILoadImagesFromFolder')) {
+            n.onExecuted({image_api_files:['001.png','002.png']});
           }
           const setReloaded = (name,value) => {const w=reloaded.widgets.find(item=>item.name===name);
             w.value=value;w.callback?.(value);};
@@ -184,17 +184,17 @@ async def main():
         assert "prompts" not in result["disconnectedPrompt"]["inputs"]
         assert result["disconnectedPrompt"]["inputs"]["prompt"] == result["reloadedFallback"]
         assert key_paths(result["apiOutput"], TEST_KEY) == [
-            (next(k for k, v in result["apiOutput"].items() if v["class_type"] == "GRSAIAPIConfig"),
+            (next(k for k, v in result["apiOutput"].items() if v["class_type"] == "ImageAPIConfig"),
              "inputs", "api_key")
         ]
         for key_path in key_paths(result["serialized"], TEST_KEY):
             assert key_path[0] == "nodes"
-            assert result["serialized"]["nodes"][key_path[1]]["type"] == "GRSAIAPIConfig"
+            assert result["serialized"]["nodes"][key_path[1]]["type"] == "ImageAPIConfig"
             assert key_path[2:] in [("widgets_values", 0), ("widgets_values_named", "api_key")]
         assert key_paths(result["serialized"], TEST_KEY)  # Confirm the documented workflow risk exists.
         for saved in result["serialized"]["nodes"]:
-            if saved["type"] == "GRSAILoadImagesFromFolder":
-                assert "grsai_files" not in saved.get("widgets_values_named", {})
+            if saved["type"] == "ImageAPILoadImagesFromFolder":
+                assert "image_api_files" not in saved.get("widgets_values_named", {})
         await page.mouse.click(*result["aspectPoint"])
         expected_label = "1024x1024 (1:1, 1K)"
         option = page.get_by_role("menuitem", name=expected_label, exact=True)
@@ -203,13 +203,13 @@ async def main():
         await option.click()
         prompt = await page.evaluate("app.graphToPrompt()")
         generated = next(value for value in prompt["output"].values()
-                         if value["class_type"] == "GRSAIBatchImageGenerate")
+                         if value["class_type"] == "BatchImageGenerate")
         assert generated["inputs"]["model.aspectRatio"] == "1024x1024"
         await page.evaluate("""async () => {
-          const batch=app.graph._nodes.find(n=>n.comfyClass==='GRSAIBatchImageGenerate');
+          const batch=app.graph._nodes.find(n=>n.comfyClass==='BatchImageGenerate');
           const {api}=await import('/scripts/api.js');
-          api.dispatchEvent(new CustomEvent('grsai.batch', {detail: {
-            node_id:batch.id,ui_token:batch.properties.grsai_ui_token,sequence:102,
+          api.dispatchEvent(new CustomEvent('image-api.batch', {detail: {
+            node_id:batch.id,ui_token:batch.properties.image_api_ui_token,sequence:102,
             stage:'running',base_count:10,prompt_count:4,total:40,concurrency:4,
             directory:'output/image_api/example',completed:17,success:16,failed:1,running:1,
             active:[{task_index:18,stage:'running',progress:42}]

@@ -1,4 +1,6 @@
-# GRSAI 批量图片任务节点设计
+# Image API 批量图片任务节点设计
+
+> 本文主体形成于 GRSAI 单 Provider 阶段。节点与类型名称已更新为通用接口；当前 Provider、模型目录和参考图硬限制以根目录 [README](../README.md) 为准。
 
 日期：2026-09-16。
 
@@ -6,7 +8,7 @@
 
 审查补充：已合并 UI 与 Prompt Variants 规则。Reference 先按 `{1, N}` 配出 N 个 Base Image Groups，再按 Base-major 顺序与 M 个 Prompt Variants 展开成 T=N×M 个任务。Folder Loader 双输出与节点 ID 已确认。`max_concurrency` 采用 INT 2–10，默认 4，约束最终 T 个任务；默认值是本地产品选择，不代表已验证的 Provider 吞吐能力。
 
-本文补充 [单次生成设计](design.md)。2026-09-18 的干净切换保留内部节点 ID，但将可见名称改为中性英文，并用独立 `API Config` 连接替换生成节点内的 API Key 输入；旧工作流需要手动连接新配置节点。
+本文补充 [单次生成设计](design.md)。当前实现使用通用 Image API 节点 ID，并用独立 `API Config` 连接提供 Provider 与连接信息。
 
 ## 1. 目标与已确认决策
 
@@ -180,10 +182,10 @@ IMAGE list = [img_1, img_2a, img_2b, img_4]
 
 | 显示名称 | 稳定节点 ID | 状态 |
 | --- | --- | --- |
-| Image Generate | `GRSAIImageGenerate` | 单次生成；内部 ID 保持稳定 |
-| Load Images From Folder | `GRSAILoadImagesFromFolder` | 文件夹参考图加载 |
-| Batch Image Generate | `GRSAIBatchImageGenerate` | 批量生成；内部 ID 保持稳定 |
-| API Config | `GRSAIAPIConfig` | API Key、可选 Base URL 和可选 Token |
+| Image Generate | `ImageGenerate` | 单次生成；内部 ID 保持稳定 |
+| Load Images From Folder | `ImageAPILoadImagesFromFolder` | 文件夹参考图加载 |
+| Batch Image Generate | `BatchImageGenerate` | 批量生成；内部 ID 保持稳定 |
+| API Config | `ImageAPIConfig` | API Key、可选 Base URL 和可选 Token |
 
 ### 3.1 文件夹加载节点
 
@@ -217,7 +219,7 @@ Folder Loader 使用路径输入框，不增加加载按钮；跟随工作流执
 
 | 输入 | UI | 行为 |
 | --- | --- | --- |
-| `references` | Reference 1、Reference 2 等动态插口 | 每口同时兼容 GRSAI 自定义图片集合和普通 IMAGE list/batch；图片仍按 `{1, N}` 规则形成 Base |
+| `references` | Reference 1、Reference 2 等动态插口 | 每口同时兼容 Image API 自定义图片集合和普通 IMAGE list/batch；图片仍按 `{1, N}` 规则形成 Base |
 | `api_config` | Config | 连接 `API Config`，整批共享 API Key、Base URL 与 Token |
 | `model` 与模型参数 | 模型下拉及对应参数控件 | 整批共享；Nano 比例/分辨率、GPT 尺寸/质量沿用现有控件 |
 | `prompt` | Prompt 多行 STRING 输入框，可接上游单一 STRING | 默认提示词，Prompts 未连接或为空数组时生效 |
@@ -537,12 +539,11 @@ API Key 不进入批量功能产生的 manifest、日志、文件名、PNG 元�
 
 ## 10. 参考与证据边界
 
-- 项目既有设计：[design.md](design.md)，新批量节点扩展图片分组、Prompt Variants、调度和持久化，不改旧节点多图共同参考或单一 Prompt 的语义。
+- 项目既有设计：[design.md](design.md)，批量节点扩展图片分组、Prompt Variants、调度和持久化，不改变单次节点的多图共同参考或单一 Prompt 语义。
 - 用户确认的 UI 与 Prompt Variants 补充规则：已合并入本文，取代批量旧稿的单一共享 Prompt 和 N=任务数定义；规范以“Prompts 非空”作为覆盖条件，不沿用简图里仅检查是否连接的简写。
 - 项目接口快照：[Nano Banana](references/snapshots/2026-09-16T124326Z/grsai/nano-banana.md)、[GPT Image](references/snapshots/2026-09-16T124326Z/grsai/gpt-image.md)、[结果查询](references/snapshots/2026-09-16T124326Z/grsai/result.md)。未写明的上限不能从示例推导。
 - ComfyUI 数据列表机制：[本地快照](references/snapshots/2026-09-16T124326Z/comfyui/data-lists.md)，注意原生短列表末项补齐不符合本设计。
 - ComfyUI V3：[本地迁移文档快照](references/snapshots/2026-09-16T124326Z/comfyui/v3-migration.md)，Autogrow 的具体目标版本行为仍需宿主测试。
-- 参考插件：[本地代码核查](reference-project-review.md)。借鉴独立请求并发，不照搬完成序追加、占位输出、补边或旧接口协议。
 - Python 目录遍历：`os.scandir` 的遍历顺序不作为配对依据；本设计显式排序。此前讨论中把补零文件名 `001/002/010` 当成字典序反例不准确，本文已纠正。
 
 用户确认的产品规则高于参考插件做法；静态文档、代码参考与真实服务测试须分别标注，不能相互替代。

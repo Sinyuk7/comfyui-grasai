@@ -7,6 +7,7 @@ from aiohttp import web
 from .balance import BalanceManager, query_sequence
 from .config import get_config, normalize_base_url
 from .model_status import query_model_status
+from .runninghub_config import get_runninghub_catalog
 
 logger = logging.getLogger(__name__)
 _manager = None
@@ -32,18 +33,27 @@ def install_host():
     def emit(payload, client_id):
         try:
             if client_id is not None:
-                server.send_sync("grsai.balance", payload, client_id)
+                server.send_sync("image-api.balance", payload, client_id)
         except Exception:
-            logger.warning("GRSAI balance display unavailable")
+            logger.warning("Image API balance display unavailable")
 
     _manager = BalanceManager(emit, model_management.processing_interrupted)
     server.app.on_cleanup.append(_manager.close)
 
-    @server.routes.get("/grsai/config")
+    @server.routes.get("/image-api/catalog")
     async def catalog(_request):
-        return web.json_response(get_config().public_catalog(), headers={"Cache-Control": "no-store"})
+        return web.json_response(
+            {
+                "default_provider": "grsai",
+                "providers": {
+                    "grsai": get_config().public_catalog(),
+                    "runninghub": get_runninghub_catalog().public_catalog(),
+                },
+            },
+            headers={"Cache-Control": "no-store"},
+        )
 
-    @server.routes.post("/grsai/model-status")
+    @server.routes.post("/image-api/model-status")
     async def model_status(request):
         try:
             body = await request.json()
@@ -73,13 +83,13 @@ def _ui_token(extra_pnginfo, node_id):
         if not isinstance(node, dict) or not isinstance(node.get("properties", {}), dict):
             continue
         if str(node.get("id")) == str(node_id):
-            token = node.get("properties", {}).get("grsai_ui_token")
+            token = node.get("properties", {}).get("image_api_ui_token")
             return token if isinstance(token, str) and len(token) <= 128 else None
     return None
 
 
 class ExecutionUI:
-    def __init__(self, hidden, config, balance_token):
+    def __init__(self, hidden, config, balance_token, provider="grsai"):
         from server import PromptServer
 
         self.server = PromptServer.instance
@@ -88,6 +98,7 @@ class ExecutionUI:
         self.client_id = self.server.client_id
         self.config = config
         self.balance_token = balance_token
+        self.provider = provider
         self.sequence = query_sequence()
         self.token = _ui_token(hidden.extra_pnginfo, self.node_id)
 
@@ -100,11 +111,11 @@ class ExecutionUI:
                     self.client_id,
                 )
         except Exception:
-            logger.warning("GRSAI UI update unavailable")
+            logger.warning("Image API UI update unavailable")
 
     async def progress(self, stage, value, task_id, details=None):
         payload = {"stage": stage, "progress": value, "task_id": task_id, **(details or {})}
-        self.send("grsai.progress", payload)
+        self.send("image-api.progress", payload)
         # Download is a separate phase in the node UI. Do not reset the native
         # generation bar to zero when local result transfer starts.
         if value is not None and stage in {"running", "succeeded"}:
@@ -113,24 +124,27 @@ class ExecutionUI:
 
                 await ComfyAPI().execution.set_progress(value, 100, node_id=self.node_id)
             except Exception:
-                logger.debug("GRSAI progress display unavailable")
+                logger.debug("Image API progress display unavailable")
 
     async def batch_progress(self, payload):
-        self.send("grsai.batch", payload)
+        self.send("image-api.batch", payload)
         try:
             from comfy_api.latest import ComfyAPI
 
             await ComfyAPI().execution.set_progress(payload["completed"], payload["total"], node_id=self.node_id)
         except Exception:
-            logger.debug("GRSAI batch progress display unavailable")
+            logger.debug("Image API batch progress display unavailable")
 
     def stale(self):
-        self.send("grsai.balance", {"state": "stale"})
+        if self.provider == "grsai":
+            self.send("image-api.balance", {"state": "stale"})
 
     def refresh_balance(self):
         try:
-            if not self.balance_token:
-                self.send("grsai.balance", {"state": "unavailable"})
+            if self.provider != "grsai":
+                self.send("image-api.balance", {"state": "unsupported"})
+            elif not self.balance_token:
+                self.send("image-api.balance", {"state": "unavailable"})
             elif _manager is not None:
                 self.server.loop.call_soon_threadsafe(
                     _manager.start,
@@ -142,8 +156,8 @@ class ExecutionUI:
                     self.token,
                 )
         except Exception:
-            self.send("grsai.balance", {"state": "error", "message": "Balance refresh unavailable."})
+            self.send("image-api.balance", {"state": "error", "message": "Balance refresh unavailable."})
 
 
-def execution_ui(hidden, config, balance_token):
-    return ExecutionUI(hidden, config, balance_token)
+def execution_ui(hidden, config, balance_token, provider="grsai"):
+    return ExecutionUI(hidden, config, balance_token, provider)

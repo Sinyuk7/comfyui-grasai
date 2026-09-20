@@ -1,6 +1,6 @@
 # 批量节点实现验证
 
-日期：2026-09-17。仅离线、localhost mock 与隔离 ComfyUI 测试，没有读取真实 Key 或调用 GRSAI 生成/余额接口。
+日期：2026-09-17。历史验证记录；此后节点 ID 与自定义类型已统一为 Image API 命名。仅离线、localhost mock 与隔离 ComfyUI 测试，没有读取真实 Key 或调用 GRSAI 生成/余额接口。
 
 ## 环境
 
@@ -12,8 +12,8 @@
 
 ## 实现选择
 
-- 新增 `GRSAILoadImagesFromFolder`、`GRSAIBatchImageGenerate`，不修改原节点 ID 或多图含义。
-- Folder `references` 使用 `GRSAI_REFERENCES` 类型，轻量来源记录和 tensor 引用；`images` 输出同一图片数据的标准 list。目录每次重新加载，不依赖路径缓存。
+- `ImageAPILoadImagesFromFolder`、`BatchImageGenerate` 使用通用节点 ID，多图含义不变。
+- Folder `references` 使用 `IMAGE_API_REFERENCES` 类型，轻量来源记录和 tensor 引用；`images` 输出同一图片数据的标准 list。目录每次重新加载，不依赖路径缓存。
 - Reference 为 V3 MultiType + Autogrow TemplateNames，全列表执行一次。采用 TemplateNames 保证 reference_1 从 1 开始；本地数量保护默认 10，可配置 1–100。
 - 目标前端断开中间 Autogrow 连接会压缩后续输入，因此插件仅对本 Batch 节点拦截这种断开处理，保留原编号空洞；后端再次检查连续性。尾部空口可保留，不开发额外加减 Dashboard。
 - Prompt Variants 按 Base-major 展开；一个普通 STRING 或一个宿主包装的 STRING 数组均可规范化，未连接/空数组回退。未保证任意第三方自定义数组类型可连接。

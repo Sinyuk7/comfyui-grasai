@@ -51,7 +51,20 @@ test("zero balance is valid and status is not serialized", () => {
   assert.match(balanceText({ state: "ready", credits: 0, queried_at: "2026-09-16T00:00:00Z" }), /: 0/);
   assert.match(balanceText({ state: "error" }), /unavailable/);
   assert.match(balanceText({ state: "unavailable" }), /Token not set/);
-  const source = readFileSync(new URL("../web/grsai.js", import.meta.url), "utf8");
+  assert.equal(balanceText({ state: "unsupported" }), "Balance: Not supported");
+  const source = readFileSync(new URL("../web/image_api.js", import.meta.url), "utf8");
   assert.match(source, /serialize: false/);
   assert.doesNotMatch(source, /queuePrompt|Authorization|apiKey/);
+});
+
+test("provider UI uses generic surfaces and preserves provider selection", () => {
+  const source = readFileSync(new URL("../web/image_api.js", import.meta.url), "utf8");
+  assert.match(source, /image-api\.providers/);
+  assert.match(source, /\/image-api\/catalog/);
+  assert.match(source, /image-api\.balance/);
+  assert.match(source, /saved\?\.provider/);
+  assert.match(source, /startsWith\("rh:"\)/);
+  assert.match(source, /syncProvider\(this\)/);
+  assert.doesNotMatch(source, /GRSAI(?:APIConfig|ImageGenerate|LoadImagesFromFolder|BatchImageGenerate)/);
+  assert.doesNotMatch(source, /grsai_(?:ui_token|selection|files|manifest)/);
 });

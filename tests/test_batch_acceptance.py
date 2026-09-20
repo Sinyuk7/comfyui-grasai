@@ -155,7 +155,7 @@ async def test_slow_manifest_replaces_preserve_monotonic_task_state(tmp_path, mo
         previous = snapshot
     assert all(t["remote_task_id"] and t["outputs"] and t["status"] == "succeeded"
                for t in snapshots[-1]["tasks"])
-    assert not list(store.path.glob(".grsai-*"))
+    assert not list(store.path.glob(".image-api-*"))
 
 
 def test_file_deleted_after_enumeration_fails_without_skipping(tmp_path, monkeypatch):
