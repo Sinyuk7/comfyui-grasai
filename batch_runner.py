@@ -66,11 +66,17 @@ class BatchRunner:
             success = sum(t["status"] == "succeeded" for t in tasks)
             failed = sum(t["status"] in {"failed", "partial", "submission_unknown"} for t in tasks)
             active = [self.active[index] for index in sorted(self.active)]
+            reported = [item["progress"] for item in active
+                        if item.get("stage") == "running"
+                        and type(item.get("progress")) in (int, float)
+                        and 0 <= item["progress"] <= 100]
+            overall_progress = ((success + failed) + sum(value / 100 for value in reported)) * 100 / self.plan.total
             try:
                 await self.progress({"stage": stage, "base_count": self.plan.base_count,
                                      "prompt_count": len(self.plan.prompts), "total": self.plan.total,
                                      "reference_count": len(self.plan.columns), "model": self.model,
                                      "concurrency": self.concurrency, "completed": success + failed,
+                                     "overall_progress": min(100, overall_progress),
                                      "success": success, "failed": failed, "running": len(active),
                                      "active": active,
                                      "directory": str(self.store.path).replace(self.key, "[redacted]"),

@@ -131,7 +131,10 @@ class ExecutionUI:
         try:
             from comfy_api.latest import ComfyAPI
 
-            await ComfyAPI().execution.set_progress(payload["completed"], payload["total"], node_id=self.node_id)
+            value = payload.get("overall_progress")
+            if not isinstance(value, (int, float)):
+                value = payload["completed"] * 100 / payload["total"]
+            await ComfyAPI().execution.set_progress(value, 100, node_id=self.node_id)
         except Exception:
             logger.debug("Image API batch progress display unavailable")
 

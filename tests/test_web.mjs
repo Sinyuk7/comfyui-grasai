@@ -10,7 +10,7 @@ test("model switches retain only legal values", () => {
 
 test("batch plan and progress count final tasks, not bases", () => {
   assert.match(batchText({ stage: "planned", base_count: 10, prompt_count: 4, total: 40, concurrency: 4 }), /10.*4.*40.*4/);
-  assert.match(batchText({ stage: "running", completed: 17, total: 40 }), /17 \/ 40/);
+  assert.match(batchText({ stage: "running", completed: 17, total: 40, overall_progress: 42.5 }), /43%.*17 \/ 40 done/);
   assert.match(batchText({ stage: "interrupted", completed: 3, total: 40 }), /3 \/ 40/);
 });
 
@@ -26,17 +26,18 @@ test("single task progress is honest across generation and download", () => {
 
 test("batch progress combines completed tasks only with reported child progress", () => {
   const reported = batchProgress({
-    stage: "running", completed: 1, total: 4, running: 2,
+    stage: "running", completed: 1, total: 4, running: 2, overall_progress: 37.5,
     active: [{ stage: "running", progress: 50 }, { stage: "running", progress: null }],
   });
   assert.equal(reported.value, 37.5);
   assert.equal(reported.indeterminate, false);
+  assert.match(reported.text, /38%.*1 \/ 4 done.*2 active/);
   const unknown = batchProgress({
     stage: "running", completed: 0, total: 1, running: 1,
     active: [{ stage: "running", progress: null }],
   });
   assert.equal(unknown.indeterminate, true);
-  assert.match(unknown.text, /Running: 1.*Generating/);
+  assert.match(unknown.text, /Overall: --.*0 \/ 1 done.*Generating/);
 });
 
 test("late responses and changed configs cannot overwrite state", () => {

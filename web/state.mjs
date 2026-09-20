@@ -31,10 +31,10 @@ export function batchText(payload) {
   if (payload.stage === "running") {
     const active = Array.isArray(payload.active) ? payload.active : [];
     const running = Number.isInteger(payload.running) ? payload.running : active.length;
-    const base = `Completed: ${payload.completed} / ${payload.total}${running ? ` · Running: ${running}` : ""}`;
+    const overall = validPercent(payload.overall_progress);
+    const base = `${overall === null ? "Overall: --" : percentText(overall)} · ${payload.completed} / ${payload.total} done`;
     if (active.length === 1) return `${base} · ${stageText(active[0])}`;
-    const reported = active.map((item) => validPercent(item.progress)).filter((value) => value !== null);
-    return reported.length ? `${base} · Progress reported: ${reported.length} / ${running}` : base;
+    return running ? `${base} · ${running} active` : base;
   }
   if (payload.stage === "interrupted") return `Interrupted: ${payload.completed} / ${payload.total}`;
   return `Finished: ${payload.success} succeeded · ${payload.failed} failed · ${payload.completed} / ${payload.total}`;
@@ -87,6 +87,10 @@ export function batchProgress(payload) {
   if (payload.stage === "planned") return { value: 0, indeterminate: false, text: batchText(payload) };
   if (payload.stage !== "running") {
     return { value: Math.min(100, completed * 100 / total), indeterminate: false, text: batchText(payload) };
+  }
+  const reportedOverall = validPercent(payload.overall_progress);
+  if (reportedOverall !== null) {
+    return { value: reportedOverall, indeterminate: false, text: batchText(payload) };
   }
   const active = Array.isArray(payload.active) ? payload.active : [];
   const fractions = active.map((item) => item.stage === "running" ? validPercent(item.progress) : null)
