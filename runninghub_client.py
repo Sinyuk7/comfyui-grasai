@@ -2,14 +2,13 @@
 
 import asyncio
 import logging
-import re
 from urllib.parse import urlsplit
 
 import aiohttp
 
 from .client import GrsaiClient, cancellable
 from .diagnostics import log_event
-from .errors import GrsaiError, clean_message
+from .errors import clean_message
 
 logger = logging.getLogger(__name__)
 
@@ -20,12 +19,19 @@ class RunningHubClient(GrsaiClient):
         self.endpoint = endpoint
 
     def _remember_id(self, data):
-        if not isinstance(data, dict) or "taskId" not in data:
+        if not isinstance(data, dict) or not ({"taskId", "task_id"} & data.keys()):
             return
-        task_id = data["taskId"]
+        raw_task_id = data["taskId"] if "taskId" in data else data["task_id"]
+        if raw_task_id is None or raw_task_id == "":
+            return
+        task_id = str(raw_task_id) if (
+            isinstance(raw_task_id, str)
+            or (type(raw_task_id) is int and raw_task_id >= 0)
+        ) else ""
         if (
-            not isinstance(task_id, str)
-            or not re.fullmatch(r"[A-Za-z0-9_.:-]{1,200}", task_id)
+            not task_id
+            or len(task_id) > 512
+            or any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in task_id)
             or self.api_key in task_id
         ):
             raise self._error("Invalid task ID in RunningHub response.")
@@ -36,7 +42,7 @@ class RunningHubClient(GrsaiClient):
             logger.info("RunningHub task accepted task_id=%s", task_id)
             log_event("task.accepted", **self.log_context, provider="runninghub", task_id=task_id)
 
-    def _validate(self, status, data):
+    def _validate(self, status, data, allow_created=False):
         self._remember_id(data)
         if not 200 <= status < 300:
             detail = data.get("errorMessage") if isinstance(data, dict) else "Non-JSON response."
@@ -46,12 +52,15 @@ class RunningHubClient(GrsaiClient):
         error_code = data.get("errorCode")
         error_message = data.get("errorMessage")
         state = data.get("status")
+        if allow_created and state is None and self.task_id and not error_code and not error_message:
+            return "CREATE"
         if not isinstance(state, str):
             raise self._error("Unknown or missing RunningHub task status.")
         state = state.upper()
         if state in {"FAILED", "CANCEL"} or error_code or error_message:
             detail = error_message or data.get("failedReason") or "No reason provided."
-            raise self._error(f"{state}: {clean_message(detail, self._secrets)}")
+            prefix = f"{state}: " if state else ""
+            raise self._error(f"{prefix}{clean_message(detail, self._secrets)}")
         if state not in {"CREATE", "QUEUED", "RUNNING", "SUCCESS"}:
             raise self._error("Unknown or missing RunningHub task status.")
         if state != "SUCCESS" and not self.task_id:
@@ -108,12 +117,7 @@ class RunningHubClient(GrsaiClient):
                     "Submission response lost; a remote task may already exist. POST was not retried."
                 ) from None
             await self._receive(status, data, delay)
-            try:
-                state = self._validate(status, data)
-            except GrsaiError as exc:
-                if not self.task_id:
-                    raise self._error(f"{exc} Remote task creation is uncertain; POST was not retried.") from None
-                raise
+            state = self._validate(status, data, allow_created=True)
             backoff = min(t.poll_interval_seconds, t.retry_backoff_max_seconds)
             while state != "SUCCESS":
                 await self._notify("running", None)

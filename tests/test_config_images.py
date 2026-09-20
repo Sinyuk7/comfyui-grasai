@@ -6,7 +6,7 @@ import torch
 from PIL import Image
 
 from grsai.config import ConfigError, load_config, parse_config
-from grsai.images import decode_image, encode_images
+from grsai.images import decode_image, encode_image_files, encode_images
 from grsai.request_builder import build_request, normalize_key
 
 
@@ -116,6 +116,19 @@ def test_ordered_batches_and_dimensions(encoding):
 def test_invalid_image_is_not_skipped(bad):
     with pytest.raises(ValueError, match="(image 2|batch 2)"):
         encode_images([torch.zeros(1, 3, 4, 3), bad])
+
+
+def test_encoding_compresses_or_defers_provider_size_limit(monkeypatch):
+    from grsai import images
+
+    batch = torch.rand(1, 64, 64, 3)
+    unrestricted = encode_image_files([batch], enforce_size_limits=False)[0]
+    monkeypatch.setattr(images, "MAX_REFERENCE_IMAGE_BYTES", 1_000)
+    compressed = encode_image_files([batch])[0]
+    assert len(unrestricted) > 1_000 >= len(compressed)
+    with Image.open(BytesIO(compressed)) as result:
+        assert result.width < 64 and result.height < 64
+    assert encode_image_files([batch], enforce_size_limits=False)[0] == unrestricted
 
 
 def png(size=(4, 3), color=(255, 0, 0), mode="RGB"):

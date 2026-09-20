@@ -109,7 +109,7 @@ class ImageGenerate(io.ComfyNode):
                 io.Image.Input(
                     "images",
                     display_name="Images",
-                    tooltip="Required reference images sent together in order (1-10 PNG images; 10 MB each, 50 MB total).",
+                    tooltip="Required reference images sent together in order (1-10 PNG images).",
                 ),
             ],
             outputs=[io.Image.Output(
@@ -151,10 +151,11 @@ class ImageGenerate(io.ComfyNode):
 
         try:
             check_cancel()
-            files = encode_image_files(images, check_cancel)
+            enforce_size_limits = settings.provider != "runninghub"
+            files = encode_image_files(images, check_cancel, enforce_size_limits)
             if not files:
                 raise ValueError("Connect 1 to 10 reference images.")
-            validate_reference_files(files)
+            validate_reference_files(files, enforce_size_limits)
             ui = execution_ui(cls.hidden, config, settings.token, settings.provider)
             if settings.provider == "runninghub":
                 build_runninghub_request(

@@ -1,6 +1,7 @@
-"""Ordered IMAGE-list conversion without resizing or implicit alpha loss."""
+"""Ordered IMAGE-list conversion with explicit provider-aware size handling."""
 
 import base64
+import math
 from io import BytesIO
 
 import numpy as np
@@ -13,15 +14,35 @@ MAX_REFERENCE_IMAGE_BYTES = 10_000_000
 MAX_REFERENCE_TOTAL_BYTES = 50_000_000
 
 
-def validate_reference_files(files):
+def _encode_png(image):
+    buffer = BytesIO()
+    image.save(buffer, format="PNG", optimize=True)
+    return buffer.getvalue()
+
+
+def _encode_png_with_limit(pixels, max_bytes, index):
+    image = Image.fromarray(pixels)
+    value = _encode_png(image)
+    while len(value) > max_bytes and image.size != (1, 1):
+        scale = min(0.95, math.sqrt(max_bytes / len(value)) * 0.98)
+        width = max(1, min(image.width - 1, math.floor(image.width * scale)))
+        height = max(1, min(image.height - 1, math.floor(image.height * scale)))
+        image = image.resize((width, height), Image.Resampling.LANCZOS)
+        value = _encode_png(image)
+    if len(value) > max_bytes:
+        raise ValueError(f"Could not compress input image {index} below the 10 MB PNG limit.")
+    return value
+
+
+def validate_reference_files(files, enforce_size_limits=True):
     if not isinstance(files, list) or not 1 <= len(files) <= MAX_REFERENCE_IMAGES:
         raise ValueError("A request requires 1 to 10 reference images.")
     for index, value in enumerate(files, 1):
         if not isinstance(value, bytes) or not value:
             raise ValueError(f"Input image {index} did not encode to PNG bytes.")
-        if len(value) > MAX_REFERENCE_IMAGE_BYTES:
+        if enforce_size_limits and len(value) > MAX_REFERENCE_IMAGE_BYTES:
             raise ValueError(f"Input image {index} exceeds the 10 MB encoded PNG limit.")
-    if sum(map(len, files)) > MAX_REFERENCE_TOTAL_BYTES:
+    if enforce_size_limits and sum(map(len, files)) > MAX_REFERENCE_TOTAL_BYTES:
         raise ValueError("Reference images exceed the 50 MB total encoded PNG limit.")
     return files
 
@@ -49,7 +70,7 @@ def split_images(batches, check_cancel=lambda: None):
     return images
 
 
-def encode_image_files(batches, check_cancel=lambda: None):
+def encode_image_files(batches, check_cancel=lambda: None, enforce_size_limits=True):
     if batches is None:
         return []
     if not isinstance(batches, (list, tuple)):
@@ -82,19 +103,19 @@ def encode_image_files(batches, check_cancel=lambda: None):
                     .round()
                     .astype(np.uint8)
                 )
-                buffer = BytesIO()
-                Image.fromarray(pixels).save(buffer, format="PNG")
-                value = buffer.getvalue()
+                value = (
+                    _encode_png_with_limit(pixels, MAX_REFERENCE_IMAGE_BYTES, index)
+                    if enforce_size_limits
+                    else _encode_png(Image.fromarray(pixels))
+                )
             except (OSError, ValueError, RuntimeError):
                 raise ValueError(f"Could not encode input image {index}.") from None
-            if len(value) > MAX_REFERENCE_IMAGE_BYTES:
-                raise ValueError(f"Input image {index} exceeds the 10 MB encoded PNG limit.")
             encoded.append(value)
             if len(encoded) > MAX_REFERENCE_IMAGES:
                 raise ValueError("A request supports at most 10 reference images.")
-            if sum(map(len, encoded)) > MAX_REFERENCE_TOTAL_BYTES:
+            if enforce_size_limits and sum(map(len, encoded)) > MAX_REFERENCE_TOTAL_BYTES:
                 raise ValueError("Reference images exceed the 50 MB total encoded PNG limit.")
-    return validate_reference_files(encoded) if encoded else []
+    return validate_reference_files(encoded, enforce_size_limits) if encoded else []
 
 
 def encode_images(batches, encoding="base64_png", check_cancel=lambda: None):

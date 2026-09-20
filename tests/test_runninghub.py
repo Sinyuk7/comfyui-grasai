@@ -14,6 +14,40 @@ from test_config_images import png
 KEY = "runninghub-test-key"
 
 
+def test_runninghub_task_ids_follow_official_normalization(config):
+    endpoint = "/openapi/v2/rhart-image-n-pro/edit"
+    numeric = RunningHubClient(config, KEY, endpoint=endpoint)
+    numeric._remember_id({"taskId": 123456789})
+    assert numeric.task_id == "123456789"
+
+    alias = RunningHubClient(config, KEY, endpoint=endpoint)
+    alias._remember_id({"task_id": "task-alias"})
+    assert alias.task_id == "task-alias"
+
+    punctuated = RunningHubClient(config, KEY, endpoint=endpoint)
+    punctuated._remember_id({"taskId": "task/+==@example"})
+    assert punctuated.task_id == "task/+==@example"
+
+    for invalid in [True, -1, "bad id", KEY]:
+        with pytest.raises(GrsaiError, match="Invalid task ID"):
+            RunningHubClient(config, KEY, endpoint=endpoint)._remember_id({"taskId": invalid})
+
+    empty = RunningHubClient(config, KEY, endpoint=endpoint)
+    empty._remember_id({"taskId": None})
+    assert empty.task_id is None
+
+
+def test_runninghub_null_task_id_does_not_mask_business_error(config):
+    client = RunningHubClient(config, KEY, endpoint="/endpoint")
+    with pytest.raises(GrsaiError, match="insufficient balance"):
+        client._validate(200, {
+            "taskId": None,
+            "status": "FAILED",
+            "errorCode": "BALANCE_NOT_ENOUGH",
+            "errorMessage": "insufficient balance",
+        })
+
+
 def test_curated_runninghub_catalog_and_payloads():
     catalog = get_runninghub_catalog()
     assert catalog.base_url == "https://www.runninghub.ai"
@@ -55,7 +89,7 @@ def test_provider_config_defaults_and_token_scope(config):
         build_provider_config("key", "", "", "other", config.base_url, catalog.base_url)
 
 
-def test_shared_reference_limits():
+def test_provider_reference_limits():
     validate_reference_files([b"x"] * 10)
     with pytest.raises(ValueError, match="1 to 10"):
         validate_reference_files([])
@@ -66,6 +100,9 @@ def test_shared_reference_limits():
     nine_mb = b"x" * 9_000_000
     with pytest.raises(ValueError, match="50 MB"):
         validate_reference_files([nine_mb] * 6)
+    assert validate_reference_files([b"x" * 10_000_001], enforce_size_limits=False)
+    with pytest.raises(ValueError, match="1 to 10"):
+        validate_reference_files([b"x"] * 11, enforce_size_limits=False)
 
 
 async def test_runninghub_upload_submit_poll_and_download(serve):
@@ -86,14 +123,14 @@ async def test_runninghub_upload_submit_poll_and_download(serve):
 
     async def submit(req):
         submissions.append(await req.json())
-        return web.json_response({"taskId": "rh-task-1", "status": "RUNNING", "errorCode": "", "errorMessage": ""})
+        return web.json_response({"taskId": 123456789})
 
     async def query(req):
         queries.append((await req.json())["taskId"])
         if len(queries) == 1:
-            return web.json_response({"taskId": "rh-task-1", "status": "RUNNING", "errorCode": "", "errorMessage": ""})
+            return web.json_response({"taskId": 123456789, "status": "RUNNING", "errorCode": "", "errorMessage": ""})
         return web.json_response({
-            "taskId": "rh-task-1",
+            "taskId": 123456789,
             "status": "SUCCESS",
             "errorCode": "",
             "errorMessage": "",
@@ -122,9 +159,9 @@ async def test_runninghub_upload_submit_poll_and_download(serve):
     images = await client.generate(request)
     assert len(uploads) == 1 and uploads[0].startswith(b"\x89PNG")
     assert submissions == [{"prompt": "private prompt", "imageUrls": urls, "resolution": "1k"}]
-    assert queries == ["rh-task-1", "rh-task-1"]
+    assert queries == ["123456789", "123456789"]
     assert len(images) == 1 and download_auth == [None]
-    assert client.task_id == "rh-task-1" and client.remote_status == "SUCCESS"
+    assert client.task_id == "123456789" and client.remote_status == "SUCCESS"
 
 
 async def test_runninghub_lost_submission_is_not_retried(serve):
@@ -141,6 +178,25 @@ async def test_runninghub_lost_submission_is_not_retried(serve):
     with pytest.raises(GrsaiError, match="may already exist"):
         await client.generate({"prompt": "edit", "imageUrls": ["url"], "resolution": "1k"})
     assert calls == [1]
+
+
+async def test_runninghub_submit_business_error_is_not_reported_as_uncertain(serve):
+    endpoint = "/openapi/v2/rhart-image-n-pro/edit"
+
+    async def reject(req):
+        return web.json_response({
+            "taskId": None,
+            "status": "FAILED",
+            "errorCode": "MODEL_UNAVAILABLE",
+            "errorMessage": "model is unavailable in this region",
+        })
+
+    cfg = await serve([("POST", endpoint, reject)])
+    client = RunningHubClient(cfg, KEY, endpoint=endpoint)
+    with pytest.raises(GrsaiError, match="model is unavailable") as error:
+        await client.generate({"prompt": "edit", "imageUrls": ["url"], "resolution": "1k"})
+    assert "uncertain" not in str(error.value)
+    assert client.submitted and client.task_id is None
 
 
 async def test_runninghub_total_deadline(serve):

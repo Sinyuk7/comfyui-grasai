@@ -96,7 +96,7 @@ class BatchRunner:
             cache_key = col, index
             if cache_key not in self.encoded:
                 self.encoded[cache_key] = encode_image_files(
-                    [column.images[index]], self.check_cancel
+                    [column.images[index]], self.check_cancel, self.provider != "runninghub"
                 )[0]
             images.append(self.encoded[cache_key])
         return images
@@ -140,7 +140,7 @@ class BatchRunner:
 
         try:
             files = self._images(spec.base_index)
-            validate_reference_files(files)
+            validate_reference_files(files, self.provider != "runninghub")
             # Encoding is synchronous. Re-check pressure and fatal state before committing a POST.
             await self._wait_to_submit()
             if self.fatal:
