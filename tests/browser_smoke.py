@@ -30,7 +30,7 @@ async def main():
         await page.route("**/image-api/model-status", model_status)
         await page.goto(args.url)
         await page.wait_for_function(
-            "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.ImageGenerate)",
+            "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.SinyukImageAPIGenerate)",
             timeout=60000,
         )
         await page.keyboard.press("Escape")
@@ -38,8 +38,8 @@ async def main():
         result = await page.evaluate("""async () => {
           const app = window.app;
           app.graph.clear();
-          const config = window.LiteGraph.createNode('ImageAPIConfig');
-          const node = window.LiteGraph.createNode('ImageGenerate');
+          const config = window.LiteGraph.createNode('SinyukImageAPIConfig');
+          const node = window.LiteGraph.createNode('SinyukImageAPIGenerate');
           app.graph.add(config); app.graph.add(node);
           config.connect(0, node, node.inputs.findIndex(i => i.name === 'api_config'));
           node.pos = [150, 150];
@@ -78,6 +78,22 @@ async def main():
           invalid.properties.image_api_selection.model = 'deleted-model';
           node.configure(invalid);
           const deletedModel = {model: get('model').value, status: get('status').value};
+          const visibleError = get('progress').element.textContent;
+          node.configure(serialized);
+          const configGet = name => config.widgets.find(w => w.name === name);
+          const configSet = (name, value) => { const w = configGet(name); w.value = value; w.callback?.(value); };
+          configSet('base_url', 'https://grsai.example');
+          configSet('provider', 'runninghub');
+          const runningHubConfig = {
+            baseUrl: configGet('base_url').value,
+            tokenDisabled: configGet('token').disabled,
+            tokenLabel: configGet('token').label,
+            providerLabel: configGet('provider').options.getOptionLabel('runninghub'),
+          };
+          configSet('base_url', 'https://runninghub.example');
+          configSet('provider', 'grsai');
+          const restoredGrsaiBaseUrl = configGet('base_url').value;
+          const providerConfigSerialized = JSON.parse(JSON.stringify(config.serialize()));
           node.configure(serialized);
           window.imageApiTestNode = node;
           app.canvas.ds.scale = 1;
@@ -86,11 +102,13 @@ async def main():
           await new Promise(requestAnimationFrame);
           await new Promise(requestAnimationFrame);
           return {initial, retained, vip, reloaded, serialized, zero, afterOld, afterConfigChange,
-            invalidParameter, deletedModel, modelWarning,
+            invalidParameter, deletedModel, visibleError, modelWarning, runningHubConfig, restoredGrsaiBaseUrl,
+            providerConfigSerialized,
             aspectPoint: [node.pos[0] + node.size[0] / 2,
               node.pos[1] + get('model.aspectRatio').last_y + 12]};
         }""")
-        print(json.dumps(result, ensure_ascii=False, indent=2))
+        printable = {key: value for key, value in result.items() if key not in {"serialized", "providerConfigSerialized"}}
+        print(json.dumps(printable, ensure_ascii=False, indent=2))
         print("PAGE_ERRORS", errors)
 
         def by_name(rows):
@@ -108,6 +126,15 @@ async def main():
         assert result["invalidParameter"] == "deleted-option"
         assert result["deletedModel"]["model"] == "deleted-model"
         assert "Configuration error" in result["deletedModel"]["status"]
+        assert "Configuration error" in result["visibleError"]
+        assert result["runningHubConfig"] == {
+            "baseUrl": "", "tokenDisabled": True,
+            "tokenLabel": "Token (GRSAI only)", "providerLabel": "RunningHub",
+        }
+        assert result["restoredGrsaiBaseUrl"] == "https://grsai.example"
+        assert result["providerConfigSerialized"]["properties"]["image_api_base_urls"] == {
+            "grsai": "https://grsai.example", "runninghub": "https://runninghub.example",
+        }
         assert all("Balance:" not in str(value) for value in result["serialized"]["widgets_values"])
         await page.mouse.click(*result["aspectPoint"])
         expected_label = "1024x1024 (1:1, 1K)"
@@ -117,7 +144,7 @@ async def main():
         await option.click()
         prompt = await page.evaluate("app.graphToPrompt()")
         generated = next(value for value in prompt["output"].values()
-                         if value["class_type"] == "ImageGenerate")
+                         if value["class_type"] == "SinyukImageAPIGenerate")
         assert generated["inputs"]["model.aspectRatio"] == "1024x1024"
         await page.screenshot(path=args.screenshot, full_page=True)
         await browser.close()

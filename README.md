@@ -1,6 +1,6 @@
 # ComfyUI Image API
 
-面向图片 API 中转站的 ComfyUI V3 通用节点。目前支持 GRSAI 与 RunningHub，并为后续 Provider 保留统一的节点、界面和执行边界。功能包括基于参考图的异步生成、多图参考、文件夹批量任务、Prompt Variants、结果保存，以及 Provider 支持时的账户积分显示。早期决策背景见 [单次设计](docs/design.md) 与 [批量设计](docs/batch-design.md)，当前产品契约以本文为准。
+面向图片 API 中转站的 ComfyUI V3 通用节点。目前支持 GRSAI 与 RunningHub，并为后续 Provider 保留统一的节点、界面和执行边界。功能包括基于参考图的异步生成、多图参考、文件夹批量任务、Prompt Variants、结果保存，以及 Provider 支持时的账户积分显示。
 
 ## 安装
 
@@ -12,9 +12,9 @@ python -m pip install -r requirements.txt
 
 可选地复制 `grsai_config.example.json` 为 `grsai_config.json`，再修改 GRSAI 默认 `base_url`、模型和等待参数。用户配置优先，升级不会覆盖它。RunningHub 使用随插件发布并严格校验的 `runninghub_config.json` 固定目录，暂不支持在界面中任意扩展模型。
 
-工作流中的 `API Config` 节点提供 `Provider`、API Key、可选 Base URL 和可选账户 Token。Provider 可选 `grsai` 或 `runninghub`；留空 Base URL 时使用对应 Provider 的默认地址。Token 目前仅用于 GRSAI 余额查询，RunningHub 不查询余额。
+工作流中的 `API Config` 节点提供 `Provider`、API Key、可选 Base URL 和可选账户 Token。Provider 可选 GRSAI 或 RunningHub；每个 Provider 分别保留自己的 Base URL，留空时使用默认地址。Token 仅用于 GRSAI 余额查询，在 RunningHub 下自动禁用。
 
-节点 ID 为 `ImageAPIConfig`、`ImageGenerate`、`BatchImageGenerate` 和 `ImageAPILoadImagesFromFolder`。项目不注册旧的 Provider 专属节点 ID；工作流统一使用通用节点和显式 Provider 配置。
+节点 ID 为 `SinyukImageAPIConfig`、`SinyukImageAPIGenerate`、`SinyukImageAPIBatchGenerate` 和 `SinyukImageAPILoadFolder`。项目不注册旧的 Provider 专属节点 ID；工作流统一使用通用节点和显式 Provider 配置。
 
 `Image Generate` 应连接到 `Preview Image`、`Save Image` 等下游执行节点；`Batch Image Generate` 自带保存并注册为终端节点，无需额外连接 Save Image 才能执行。
 
@@ -48,7 +48,7 @@ Batch 输出 `images`（成功图片按任务/结果顺序平铺）和 `manifest
 
 每次 Queue 都是新批次，**不会恢复旧批次或自动重生成失败项**。中断只停止本地等待，已经接受的远端任务可能继续计费。下游 Save Image 会额外保存副本，并可能嵌入含 Key 的工作流元数据；内部保存的 PNG 不附带工作流元数据。
 
-两个 Provider 使用相同的本地参考图契约：每次必须提供 1–10 张参考图；每张编码后的 PNG 不超过 10,000,000 bytes，总计不超过 50,000,000 bytes。`batch_reference_limit` 即使配置得更高，生成请求也仍以 10 张为上限。完整批量验证与未覆盖边界见 [批量验证记录](docs/batch-verification.md)。
+两个 Provider 使用相同的本地参考图契约：每次必须提供 1–10 张参考图；每张编码后的 PNG 不超过 10,000,000 bytes，总计不超过 50,000,000 bytes。`batch_reference_limit` 即使配置得更高，生成请求也仍以 10 张为上限。
 
 ## 单次节点与通用注意事项
 

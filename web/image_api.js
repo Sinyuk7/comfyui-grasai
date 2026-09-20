@@ -4,6 +4,13 @@ import { acceptEvent, balanceText, batchProgress, batchText, selectedParameters,
 
 let catalog;
 const states = new WeakMap();
+const NODE_IDS = {
+  config: "SinyukImageAPIConfig",
+  generate: "SinyukImageAPIGenerate",
+  folder: "SinyukImageAPILoadFolder",
+  batch: "SinyukImageAPIBatchGenerate",
+};
+const PROVIDER_LABELS = { grsai: "GRSAI", runninghub: "RunningHub" };
 const widget = (node, name) => node?.widgets?.find((item) => item.name === name);
 const parameters = (node) => Object.fromEntries((node.widgets ?? [])
   .filter((item) => item.name.startsWith("model."))
@@ -25,6 +32,11 @@ function progressElement() {
 
 function renderProgress(state, view) {
   state.progress.label.textContent = view.text || "Idle";
+  state.progress.root.title = view.tooltip ?? view.text ?? "";
+  state.progress.label.style.color = view.level === "error" ? "#ef4444"
+    : view.level === "warning" ? "#f59e0b" : "";
+  state.progress.fill.style.background = view.level === "error" ? "#ef4444"
+    : view.level === "warning" ? "#f59e0b" : "#3b9cff";
   state.progress.root.dataset.indeterminate = String(view.indeterminate);
   state.progress.animation?.cancel();
   state.progress.animation = null;
@@ -37,6 +49,15 @@ function renderProgress(state, view) {
       { duration: 1200, iterations: Infinity, easing: "ease-in-out" },
     );
   }
+}
+
+function showStatus(node, text, level = "error", tooltip = text) {
+  const state = states.get(node);
+  if (!state) return;
+  state.status.value = text;
+  state.status.options.tooltip = tooltip;
+  renderProgress(state, { value: 0, indeterminate: false, text, level, tooltip });
+  node.setDirtyCanvas(true, true);
 }
 
 function resetRemoteState(node, provider = providerId(node)) {
@@ -81,9 +102,9 @@ function syncProvider(node, providerIdOverride = providerId(node)) {
   const ids = Object.keys(provider.models);
   model.options.values = ids;
   model.options.getOptionLabel = (value) => provider.models[value]?.label ?? value;
-  if (!ids.includes(model.value)) model.value = provider.default_model;
-  decorateParameters(node, providerIdOverride);
+  if (!ids.includes(model.value) && !states.get(node)?.configuring) model.value = provider.default_model;
   resetRemoteState(node, providerIdOverride);
+  decorateParameters(node, providerIdOverride);
 }
 
 function resetConfigConsumers(configNode) {
@@ -96,15 +117,11 @@ function resetConfigConsumers(configNode) {
 
 function modelWarning(node, message) {
   const detail = message || "The selected model is currently unavailable.";
+  showStatus(node, `Model unavailable: ${detail}`, "warning", detail);
   const toast = app.extensionManager?.toast;
   if (toast?.add) {
     toast.add({ severity: "warn", summary: "Model unavailable", detail, life: 6000 });
-    return;
   }
-  const state = states.get(node);
-  state.status.value = `Model unavailable: ${detail}`;
-  state.status.options.tooltip = detail;
-  node.setDirtyCanvas(true, true);
 }
 
 async function checkModel(node, model) {
@@ -132,7 +149,7 @@ function decorateParameters(node, provider = providerId(node)) {
   const state = states.get(node);
   const profile = activeCatalog(node, provider).models[widget(node, "model")?.value];
   if (!profile) {
-    state.status.value = "Configuration error: model removed or disabled";
+    showStatus(node, "Configuration error: model removed or disabled");
     return;
   }
   for (const [name, rule] of Object.entries(profile.parameters)) {
@@ -170,8 +187,86 @@ function validateSelection(node, profile) {
   const invalid = Object.entries(profile.parameters).some(([name, rule]) =>
     !rule.options.some((option) => option.value === widget(node, `model.${name}`)?.value));
   const status = states.get(node).status;
-  if (invalid) status.value = "Configuration error: parameter removed or invalid";
-  else if (status.value.startsWith("Configuration error")) status.value = "";
+  if (invalid) showStatus(node, "Configuration error: parameter removed or invalid");
+  else if (status.value.startsWith("Configuration error")) {
+    status.value = "";
+    renderProgress(states.get(node), { value: 0, indeterminate: false, text: "Idle" });
+  }
+}
+
+function configureProviderNode(node) {
+  node.properties ??= {};
+  const provider = widget(node, "provider");
+  const baseUrlWidget = widget(node, "base_url");
+  const token = widget(node, "token");
+  if (!provider || !baseUrlWidget || !token) return;
+
+  provider.options.getOptionLabel = (value) => PROVIDER_LABELS[value] ?? value;
+  node.properties.image_api_base_urls ??= {};
+  let current = provider.value === "runninghub" ? "runninghub" : "grsai";
+  if (!(current in node.properties.image_api_base_urls)) {
+    node.properties.image_api_base_urls[current] = String(baseUrlWidget.value ?? "");
+  }
+
+  const refresh = () => {
+    const runningHub = current === "runninghub";
+    token.disabled = runningHub;
+    token.options.disabled = runningHub;
+    token.label = runningHub ? "Token (GRSAI only)" : "Token";
+    token.options.tooltip = runningHub
+      ? "RunningHub does not use the account Token. The saved GRSAI value is preserved."
+      : "Optional GRSAI account token used only for balance checks.";
+    baseUrlWidget.options.tooltip = `Optional ${PROVIDER_LABELS[current]} API host. Leave empty to use the Provider default.`;
+    node.setDirtyCanvas(true, true);
+  };
+
+  const providerCallback = provider.callback;
+  provider.callback = function (...args) {
+    node.properties.image_api_base_urls[current] = String(baseUrlWidget.value ?? "");
+    const result = providerCallback?.apply(this, args);
+    const next = this.value === "runninghub" ? "runninghub" : "grsai";
+    if (next !== current) {
+      current = next;
+      baseUrlWidget.value = node.properties.image_api_base_urls[current] ?? "";
+    }
+    refresh();
+    resetConfigConsumers(node);
+    return result;
+  };
+
+  const baseUrlCallback = baseUrlWidget.callback;
+  baseUrlWidget.callback = function (...args) {
+    const result = baseUrlCallback?.apply(this, args);
+    node.properties.image_api_base_urls[current] = String(this.value ?? "");
+    resetConfigConsumers(node);
+    return result;
+  };
+
+  for (const name of ["api_key", "token"]) {
+    const item = widget(node, name);
+    if (!item) continue;
+    const callback = item.callback;
+    item.callback = function (...args) {
+      const result = callback?.apply(this, args);
+      resetConfigConsumers(node);
+      return result;
+    };
+  }
+  const configure = node.configure;
+  node.configure = function (data) {
+    const result = configure.call(this, data);
+    current = provider.value === "runninghub" ? "runninghub" : "grsai";
+    node.properties.image_api_base_urls ??= {};
+    node.properties.image_api_base_urls[current] = String(baseUrlWidget.value ?? "");
+    refresh();
+    return result;
+  };
+  const serialize = node.onSerialize;
+  node.onSerialize = function (data) {
+    node.properties.image_api_base_urls[current] = String(baseUrlWidget.value ?? "");
+    serialize?.call(this, data);
+  };
+  refresh();
 }
 
 app.registerExtension({
@@ -205,13 +300,14 @@ app.registerExtension({
     }
   },
   nodeCreated(node) {
-    if (node.comfyClass === "ImageAPILoadImagesFromFolder") {
+    if (node.comfyClass === NODE_IDS.folder) {
       const details = document.createElement("details");
       const summary = document.createElement("summary");
       summary.textContent = "Files: Not loaded";
       const list = document.createElement("pre");
       list.style.cssText = "white-space:pre-wrap;overflow-wrap:anywhere;margin:4px 0;max-height:200px;overflow:auto";
       details.style.cssText = "padding:6px;color:var(--input-text);font-size:12px";
+      details.title = "Files loaded in natural filename order from the ComfyUI server folder.";
       details.append(summary, list);
       const filesWidget = node.addDOMWidget("image_api_files", "details", details, { serialize: false });
       filesWidget.serialize = false;
@@ -225,27 +321,18 @@ app.registerExtension({
       };
       return;
     }
-    if (node.comfyClass === "ImageAPIConfig") {
-      for (const name of ["api_key", "base_url", "token", "provider"]) {
-        const item = widget(node, name);
-        if (!item) continue;
-        const callback = item.callback;
-        item.callback = function (...args) {
-          const result = callback?.apply(this, args);
-          resetConfigConsumers(node);
-          return result;
-        };
-      }
+    if (node.comfyClass === NODE_IDS.config) {
+      configureProviderNode(node);
       return;
     }
-    if (!["ImageGenerate", "BatchImageGenerate"].includes(node.comfyClass) || !catalog) return;
+    if (![NODE_IDS.generate, NODE_IDS.batch].includes(node.comfyClass) || !catalog) return;
     node.properties ??= {};
     const balance = node.addWidget("text", "balance", "", () => {}, { serialize: false });
     const status = node.addWidget("text", "status", "", () => {}, { serialize: false });
     const progress = progressElement();
     const progressWidget = node.addDOMWidget("progress", "div", progress.root, { serialize: false });
     progressWidget.serialize = false;
-    const directory = node.comfyClass === "BatchImageGenerate"
+    const directory = node.comfyClass === NODE_IDS.batch
       ? node.addWidget("text", "output_directory", "", () => {}, { serialize: false }) : null;
     for (const item of [balance, status, directory].filter(Boolean)) {
       item.serialize = false;
@@ -254,8 +341,9 @@ app.registerExtension({
       Object.defineProperty(item, "displayName", { configurable: true, get: () => "" });
       Object.defineProperty(item, "_displayValue", { configurable: true, get() { return String(this.value); } });
     }
-    // Progress DOM owns the visible execution status. Keep the legacy status
-    // widget as a compatibility surface without wasting a blank row.
+    balance.options.tooltip = "Latest account balance state. RunningHub does not provide this check.";
+    if (directory) directory.options.tooltip = "Batch output folder on the ComfyUI server.";
+    // Keep machine-readable state without adding another visible row.
     status.type = "hidden";
     status.computeSize = () => [0, -4];
     status.draw = () => {};
@@ -273,7 +361,10 @@ app.registerExtension({
       const labelReferences = () => {
         for (const input of node.inputs ?? []) {
           const match = /^references\.reference_(\d+)$/.exec(input.name);
-          if (match) input.label = `Reference ${match[1]}`;
+          if (match) {
+            input.label = `Reference ${match[1]}`;
+            input.tooltip = "One ordered reference source. Each task receives one image from every connected source.";
+          }
         }
       };
       labelReferences();
@@ -309,6 +400,7 @@ app.registerExtension({
           if (item) item.value = value;
         }
         state.status.value = "";
+        renderProgress(state, { value: 0, indeterminate: false, text: "Idle" });
         void checkModel(node, model.value);
       }
       decorateParameters(node);

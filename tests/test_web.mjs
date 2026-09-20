@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { acceptEvent, balanceText, batchProgress, batchText, selectedParameters, taskProgress } from "../web/state.mjs";
 
 test("model switches retain only legal values", () => {
@@ -65,6 +65,25 @@ test("provider UI uses generic surfaces and preserves provider selection", () =>
   assert.match(source, /saved\?\.provider/);
   assert.match(source, /startsWith\("rh:"\)/);
   assert.match(source, /syncProvider\(this\)/);
+  assert.match(source, /PROVIDER_LABELS/);
+  assert.match(source, /image_api_base_urls/);
+  assert.match(source, /Token \(GRSAI only\)/);
+  assert.match(source, /showStatus\(node/);
   assert.doesNotMatch(source, /GRSAI(?:APIConfig|ImageGenerate|LoadImagesFromFolder|BatchImageGenerate)/);
   assert.doesNotMatch(source, /grsai_(?:ui_token|selection|files|manifest)/);
+});
+
+test("every public node has a concise in-app help page", () => {
+  const ids = [
+    "SinyukImageAPIConfig",
+    "SinyukImageAPIGenerate",
+    "SinyukImageAPILoadFolder",
+    "SinyukImageAPIBatchGenerate",
+  ];
+  for (const id of ids) {
+    const url = new URL(`../web/docs/${id}.md`, import.meta.url);
+    assert.equal(existsSync(url), true, id);
+    const text = readFileSync(url, "utf8");
+    assert.ok(text.length >= 80 && text.split("\n").length <= 10, id);
+  }
 });

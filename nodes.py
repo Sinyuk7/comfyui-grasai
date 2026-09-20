@@ -47,6 +47,14 @@ def model_profiles():
     return {**get_config().models, **get_runninghub_catalog().models}
 
 
+PARAMETER_TOOLTIPS = {
+    "aspectRatio": "Output aspect ratio supported by the selected model. Auto lets the provider infer it.",
+    "imageSize": "Output resolution tier supported by the selected model.",
+    "resolution": "Output resolution tier supported by the selected model.",
+    "quality": "Provider quality or processing tier supported by the selected model.",
+}
+
+
 class ImageGenerate(io.ComfyNode):
     @classmethod
     def define_schema(cls):
@@ -67,12 +75,12 @@ class ImageGenerate(io.ComfyNode):
                         options=list(parameter.values),
                         default=parameter.default,
                         display_name=label,
-                        tooltip=f"{label} supported by the selected model.",
+                        tooltip=PARAMETER_TOOLTIPS[name],
                     )
                 )
             options.append(io.DynamicCombo.Option(model, inputs))
         return io.Schema(
-            node_id="ImageGenerate",
+            node_id="SinyukImageAPIGenerate",
             display_name="Image Generate",
             category="Image API",
             description="Generate images with a compatible asynchronous image API.",
@@ -88,7 +96,7 @@ class ImageGenerate(io.ComfyNode):
                     display_name="Model",
                     options=options,
                     extra_dict={"default": config.default_model},
-                    tooltip="Select a model. Availability checks are advisory only.",
+                    tooltip="Select a curated edit model for the connected Provider. Availability checks are advisory only.",
                 ),
                 io.String.Input(
                     "prompt",
@@ -96,15 +104,20 @@ class ImageGenerate(io.ComfyNode):
                     default="",
                     multiline=True,
                     dynamic_prompts=False,
-                    tooltip="Instructions for the generated image.",
+                    tooltip="Instructions for editing or generating from the connected reference images.",
                 ),
                 io.Image.Input(
                     "images",
                     display_name="Images",
-                    tooltip="Required reference images used together in one request (1-10 images).",
+                    tooltip="Required reference images sent together in order (1-10 PNG images; 10 MB each, 50 MB total).",
                 ),
             ],
-            outputs=[io.Image.Output("images", display_name="Images", is_output_list=True)],
+            outputs=[io.Image.Output(
+                "images",
+                display_name="Images",
+                is_output_list=True,
+                tooltip="Generated images in provider result order. Connect to Preview Image, Save Image, or image processing nodes.",
+            )],
             hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo],
             is_input_list=True,
             not_idempotent=True,

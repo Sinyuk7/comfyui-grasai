@@ -37,9 +37,9 @@ def host(monkeypatch, tmp_path):
         def execute(cls):
             return io.NodeOutput(["standing", "sitting"])
 
-    for name, node in [("BatchImageGenerate", BatchImageGenerate),
-                       ("ImageAPILoadImagesFromFolder", ImageAPILoadImagesFromFolder),
-                       ("ImageAPIConfig", ImageAPIConfig),
+    for name, node in [("SinyukImageAPIBatchGenerate", BatchImageGenerate),
+                       ("SinyukImageAPILoadFolder", ImageAPILoadImagesFromFolder),
+                       ("SinyukImageAPIConfig", ImageAPIConfig),
                        ("TestBatchPrompts", Prompts)]:
         monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, name, node)
     (tmp_path / "output").mkdir()
@@ -66,7 +66,7 @@ def inputs(linked=False):
 
 
 def config_node(api_key="host-test-key", token="token"):
-    return {"class_type": "ImageAPIConfig", "inputs": {
+    return {"class_type": "SinyukImageAPIConfig", "inputs": {
         "api_key": api_key, "base_url": "", "token": token, "provider": "grsai"
     }}
 
@@ -137,9 +137,9 @@ async def test_full_executor_dual_outputs_prompt_list_and_repeat_queue(host, mon
     executor = execution.PromptExecutor(server, cache_args={"ram": 0, "ram_inactive": 0, "lru": 0})
     graph = {
         "0": config_node(),
-        "1": {"class_type": "ImageAPILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
+        "1": {"class_type": "SinyukImageAPILoadFolder", "inputs": {"folder": str(folder)}},
         "2": {"class_type": "TestBatchPrompts", "inputs": {}},
-        "3": {"class_type": "BatchImageGenerate", "inputs": {
+        "3": {"class_type": "SinyukImageAPIBatchGenerate", "inputs": {
             **inputs(linked=True), "references.reference_1": ["1", 0], "references.reference_2": ["1", 1],
             "prompts": ["2", 0]}},
         "4": {"class_type": "PreviewImage", "inputs": {"images": ["3", 0]}},
@@ -180,8 +180,8 @@ async def test_batch_is_terminal_and_all_failed_still_returns_report(host, monke
 
     monkeypatch.setattr(GrsaiClient, "generate", generate)
     graph = {"0": config_node(),
-             "1": {"class_type": "ImageAPILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
-             "2": {"class_type": "BatchImageGenerate", "inputs": {
+             "1": {"class_type": "SinyukImageAPILoadFolder", "inputs": {"folder": str(folder)}},
+             "2": {"class_type": "SinyukImageAPIBatchGenerate", "inputs": {
                  **inputs(linked=True), "references.reference_1": ["1", 0]}},
              "3": {"class_type": "PreviewImage", "inputs": {"images": ["2", 0]}}}
     executor = execution.PromptExecutor(SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None),
@@ -198,7 +198,7 @@ async def test_distinct_batch_cache_keys(host):
     from comfy_execution.graph import DynamicPrompt
 
     assert batch.fingerprint_inputs() != batch.fingerprint_inputs()
-    graph = DynamicPrompt({str(i): {"class_type": "BatchImageGenerate", "inputs": inputs()} for i in (1, 2)})
+    graph = DynamicPrompt({str(i): {"class_type": "SinyukImageAPIBatchGenerate", "inputs": inputs()} for i in (1, 2)})
 
     class Unchanged:
         async def get(self, node_id):
@@ -315,8 +315,8 @@ async def test_folder_content_changes_invalidate_real_executor_cache(host, monke
 
     monkeypatch.setattr(BatchRunner, "run", run)
     graph = {"0": config_node(),
-             "1": {"class_type": "ImageAPILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
-             "2": {"class_type": "BatchImageGenerate", "inputs": {
+             "1": {"class_type": "SinyukImageAPILoadFolder", "inputs": {"folder": str(folder)}},
+             "2": {"class_type": "SinyukImageAPIBatchGenerate", "inputs": {
                  **inputs(linked=True), "references.reference_1": ["1", 0]}}}
     executor = execution.PromptExecutor(SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None),
                                        cache_args={"ram": 0, "ram_inactive": 0, "lru": 100})
@@ -361,13 +361,13 @@ async def test_test_key_persistence_boundary_in_actual_saved_pngs(host, monkeypa
 
     monkeypatch.setattr(GrsaiClient, "generate", generate)
     graph = {"0": config_node(key),
-             "1": {"class_type": "ImageAPILoadImagesFromFolder", "inputs": {"folder": str(folder)}},
-             "2": {"class_type": "BatchImageGenerate", "inputs": {
+             "1": {"class_type": "SinyukImageAPILoadFolder", "inputs": {"folder": str(folder)}},
+             "2": {"class_type": "SinyukImageAPIBatchGenerate", "inputs": {
                  **inputs(linked=True), "references.reference_1": ["1", 0]}},
              "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "downstream"}}}
-    workflow = {"nodes": [{"id": 0, "type": "ImageAPIConfig",
+    workflow = {"nodes": [{"id": 0, "type": "SinyukImageAPIConfig",
                             "widgets_values": [key, "", "token", "grsai"]},
-                          {"id": 2, "type": "BatchImageGenerate",
+                          {"id": 2, "type": "SinyukImageAPIBatchGenerate",
                            "widgets_values": ["nano-banana-2", "auto", "1K", "fallback", 4, "Clothes"],
                            "properties": {"image_api_ui_token": "test-token"}}]}
     executor = execution.PromptExecutor(SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None),

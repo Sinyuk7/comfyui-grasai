@@ -13,7 +13,7 @@ class ImageAPIConfig(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="ImageAPIConfig",
+            node_id="SinyukImageAPIConfig",
             display_name="API Config",
             category="Image API",
             description="Connection settings shared by image generation nodes.",
@@ -25,7 +25,7 @@ class ImageAPIConfig(io.ComfyNode):
                     default="",
                     multiline=False,
                     socketless=True,
-                    tooltip="Required for generation. Saved in the workflow and may be included in image metadata.",
+                    tooltip="Provider API key used for generation. Saved in the workflow and may be included in image metadata.",
                 ),
                 io.String.Input(
                     "base_url",
@@ -33,7 +33,7 @@ class ImageAPIConfig(io.ComfyNode):
                     default="",
                     multiline=False,
                     socketless=True,
-                    tooltip="Optional API host. Leave empty to use the server default.",
+                    tooltip="Optional API host for the selected Provider. Leave empty to use that Provider's default.",
                 ),
                 io.String.Input(
                     "token",
@@ -41,17 +41,21 @@ class ImageAPIConfig(io.ComfyNode):
                     default="",
                     multiline=False,
                     socketless=True,
-                    tooltip="Optional account token for balance checks. It is not used for generation.",
+                    tooltip="Optional GRSAI account token used only for balance checks. RunningHub ignores this value.",
                 ),
                 io.Combo.Input(
                     "provider",
                     display_name="Provider",
                     options=["grsai", "runninghub"],
                     default="grsai",
-                    tooltip="Select the API provider used by connected generation nodes.",
+                    tooltip="Select the API provider used by connected generation nodes. Each Provider keeps its own Base URL.",
                 ),
             ],
-            outputs=[APIConfigType.Output("config", display_name="Config")],
+            outputs=[APIConfigType.Output(
+                "config",
+                display_name="Config",
+                tooltip="Validated Provider, credentials, and endpoint settings for Image API generation nodes.",
+            )],
         )
 
     @classmethod

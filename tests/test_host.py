@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -33,8 +34,8 @@ def host(monkeypatch):
         def execute(cls):
             return io.NodeOutput(torch.zeros(1, 2, 2, 3))
 
-    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "ImageAPIConfig", ImageAPIConfig)
-    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "ImageGenerate", ImageGenerate)
+    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "SinyukImageAPIConfig", ImageAPIConfig)
+    monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "SinyukImageAPIGenerate", ImageGenerate)
     monkeypatch.setitem(nodes.NODE_CLASS_MAPPINGS, "ImageAPITestImage", TestImage)
     return execution, ImageGenerate
 
@@ -72,11 +73,29 @@ async def test_extension_registers_only_generic_node_ids(host):
     extension = await comfy_entrypoint()
     node_ids = [node.define_schema().node_id for node in await extension.get_node_list()]
     assert node_ids == [
-        "ImageAPIConfig",
-        "ImageGenerate",
-        "ImageAPILoadImagesFromFolder",
-        "BatchImageGenerate",
+        "SinyukImageAPIConfig",
+        "SinyukImageAPIGenerate",
+        "SinyukImageAPILoadFolder",
+        "SinyukImageAPIBatchGenerate",
     ]
+
+
+async def test_public_nodes_have_complete_inline_and_panel_help(host):
+    from grsai import comfy_entrypoint
+
+    extension = await comfy_entrypoint()
+    nodes = await extension.get_node_list()
+    for node in nodes:
+        schema = node.define_schema()
+        assert schema.description, schema.node_id
+        assert (Path(__file__).parents[1] / "web" / "docs" / f"{schema.node_id}.md").is_file()
+        for input_ in schema.inputs:
+            assert input_.tooltip, f"{schema.node_id}.{input_.id}"
+            template = getattr(input_, "template", None)
+            if template is not None:
+                assert template.input.tooltip, f"{schema.node_id}.{input_.id} template"
+        for output in schema.outputs:
+            assert output.tooltip, f"{schema.node_id}.{output.id}"
 
 
 @pytest.mark.parametrize(
@@ -134,8 +153,8 @@ async def test_fingerprints_and_distinct_node_cache_keys(host):
     assert first != second
     prompt = DynamicPrompt(
         {
-            "1": {"class_type": "ImageGenerate", "inputs": inputs()},
-            "2": {"class_type": "ImageGenerate", "inputs": inputs()},
+            "1": {"class_type": "SinyukImageAPIGenerate", "inputs": inputs()},
+            "2": {"class_type": "SinyukImageAPIGenerate", "inputs": inputs()},
         }
     )
 
@@ -177,11 +196,11 @@ async def test_full_executor_cache_and_preview_save(host, monkeypatch, tmp_path)
     server = SimpleNamespace(client_id=None, last_node_id=None, send_sync=lambda *_: None)
     executor = execution.PromptExecutor(server, cache_args={"ram": 0, "ram_inactive": 0, "lru": 0})
     graph = {
-        "0": {"class_type": "ImageAPIConfig", "inputs": {
+        "0": {"class_type": "SinyukImageAPIConfig", "inputs": {
             "api_key": "key", "base_url": "", "token": "token", "provider": "grsai"}},
         "9": {"class_type": "ImageAPITestImage", "inputs": {}},
-        "1": {"class_type": "ImageGenerate", "inputs": inputs(linked=True)},
-        "2": {"class_type": "ImageGenerate", "inputs": inputs(linked=True)},
+        "1": {"class_type": "SinyukImageAPIGenerate", "inputs": inputs(linked=True)},
+        "2": {"class_type": "SinyukImageAPIGenerate", "inputs": inputs(linked=True)},
         "3": {"class_type": "PreviewImage", "inputs": {"images": ["1", 0]}},
         "4": {"class_type": "SaveImage", "inputs": {"images": ["2", 0], "filename_prefix": "grsai-test"}},
     }

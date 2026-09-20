@@ -26,13 +26,18 @@ class ImageAPILoadImagesFromFolder(io.ComfyNode):
     @classmethod
     def define_schema(cls):
         return io.Schema(
-            node_id="ImageAPILoadImagesFromFolder", display_name="Load Images From Folder",
+            node_id="SinyukImageAPILoadFolder", display_name="Load Images From Folder",
             category="Image API", is_input_list=True,
+            description="Load an ordered, non-recursive image set from a folder on the ComfyUI server.",
             search_aliases=["GRSAI Load Images From Folder"],
             inputs=[io.String.Input("folder", default="", display_name="Folder",
-                                    tooltip="Directory on the ComfyUI server. Natural filename order; no resizing.")],
-            outputs=[ReferenceType.Output("references", display_name="References"),
-                     io.Image.Output("images", display_name="Images", is_output_list=True)],
+                                    tooltip="Folder on the ComfyUI server. Loads supported images non-recursively in natural filename order; re-scans on every run and does not resize.")],
+            outputs=[ReferenceType.Output(
+                        "references", display_name="References",
+                        tooltip="Ordered images plus source filenames for a Batch Image Generate Reference input."),
+                     io.Image.Output(
+                        "images", display_name="Images", is_output_list=True,
+                        tooltip="The same ordered images as a standard IMAGE list for Preview, Save, or processing nodes.")],
         )
 
     @classmethod
@@ -54,24 +59,32 @@ class BatchImageGenerate(io.ComfyNode):
         for input_, label in zip(shared, ("Config", "Model", "Prompt")):
             input_.display_name = label
         template = io.Autogrow.TemplateNames(
-            io.MultiType.Input("reference", types=[ReferenceType, io.Image]),
+            io.MultiType.Input(
+                "reference",
+                types=[ReferenceType, io.Image],
+                tooltip="One ordered reference source. Connect a folder References output or a standard IMAGE input.",
+            ),
             names=[f"reference_{i}" for i in range(1, config.batch_reference_limit + 1)], min=1,
         )
         return io.Schema(
-            node_id="BatchImageGenerate", display_name="Batch Image Generate", category="Image API",
+            node_id="SinyukImageAPIBatchGenerate", display_name="Batch Image Generate", category="Image API",
             description="Generate and save an ordered set of image and prompt combinations.",
             search_aliases=["GRSAI Batch Image Generate", "RunningHub Batch Image Generate"],
             inputs=[io.Autogrow.Input("references", display_name="References", template=template,
-                                     tooltip="Connect one or more ordered reference image sources."),
+                                     tooltip="Connect 1-10 ordered reference sources. Each task receives one image from every connected source."),
                     io.String.Input("prompts", display_name="Prompts", optional=True, force_input=True,
-                                    tooltip="Nonempty STRING list overrides Prompt. Always N x M variants, not pairing."),
+                                    tooltip="Optional STRING list. Nonempty values override Prompt and create every base x prompt combination, not index pairing."),
                     *shared,
                     io.Int.Input("max_concurrency", display_name="Max Concurrency", default=4, min=2, max=10,
-                                 tooltip="Maximum number of generation tasks running at the same time."),
+                                 tooltip="Maximum paid generation tasks running at once (2-10). Higher values may hit Provider rate limits."),
                     io.String.Input("output_prefix", display_name="Output Prefix", default="ImageAPI",
-                                    tooltip="Filename prefix for saved images.")],
-            outputs=[io.Image.Output("images", display_name="Images", is_output_list=True),
-                     io.String.Output("manifest", display_name="Manifest")],
+                                    tooltip="Filename prefix inside a new batch folder under ComfyUI output. A manifest is saved beside the images.")],
+            outputs=[io.Image.Output(
+                        "images", display_name="Images", is_output_list=True,
+                        tooltip="Successful generated images flattened in task and result order; failed tasks are omitted."),
+                     io.String.Output(
+                        "manifest", display_name="Manifest",
+                        tooltip="Absolute path to the JSON manifest containing task mapping, output files, remote IDs, and errors.")],
             hidden=[io.Hidden.unique_id, io.Hidden.extra_pnginfo],
             is_input_list=True, is_output_node=True, not_idempotent=True,
         )

@@ -46,7 +46,7 @@ async def main():
         ))
         await page.goto(args.url)
         await page.wait_for_function(
-            "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.BatchImageGenerate)",
+            "Boolean(window.app?.graph && window.LiteGraph?.registered_node_types?.SinyukImageAPIBatchGenerate)",
             timeout=60000,
         )
         await page.keyboard.press("Escape")
@@ -56,11 +56,11 @@ async def main():
             const node = window.LiteGraph.createNode(name); app.graph.add(node); return node;
           };
           app.graph.clear();
-          const config = make('ImageAPIConfig');
-          const folder = make('ImageAPILoadImagesFromFolder');
-          const second = make('ImageAPILoadImagesFromFolder');
-          const third = make('ImageAPILoadImagesFromFolder');
-          const batch = make('BatchImageGenerate');
+          const config = make('SinyukImageAPIConfig');
+          const folder = make('SinyukImageAPILoadFolder');
+          const second = make('SinyukImageAPILoadFolder');
+          const third = make('SinyukImageAPILoadFolder');
+          const batch = make('SinyukImageAPIBatchGenerate');
           config.connect(0, batch, batch.inputs.findIndex(i => i.name === 'api_config'));
           const promptsNode = make('PrimitiveStringMultiline');
           promptsNode.widgets.find(w => w.name === 'value').value = 'Standing fashion portrait';
@@ -118,19 +118,19 @@ async def main():
           const widgets=batch.widgets.map(w=>({name:w.name,value:w.value}));
           const serialized=app.graph.serialize();
           await app.loadGraphData(serialized);
-          const reloaded=app.graph._nodes.find(n=>n.comfyClass==='BatchImageGenerate');
+          const reloaded=app.graph._nodes.find(n=>n.comfyClass==='SinyukImageAPIBatchGenerate');
           const reloadedInputs=reloaded.inputs.map(i=>({name:i.name,link:i.link}));
           const prefix=reloaded.widgets.find(w=>w.name==='output_prefix').value;
           const apiPrompt=await app.graphToPrompt();
-          const batchPrompt=Object.values(apiPrompt.output).find(n=>n.class_type==='BatchImageGenerate');
-          const reloadedConfig=app.graph._nodes.find(n=>n.comfyClass==='ImageAPIConfig');
+          const batchPrompt=Object.values(apiPrompt.output).find(n=>n.class_type==='SinyukImageAPIBatchGenerate');
+          const reloadedConfig=app.graph._nodes.find(n=>n.comfyClass==='SinyukImageAPIConfig');
           const reloadedKey=reloadedConfig.widgets.find(w=>w.name==='api_key').value;
           const reloadedFallback=reloaded.widgets.find(w=>w.name==='prompt').value;
           const promptsLink=batchPrompt.inputs.prompts;
           const connectedPrompt=apiPrompt.output[promptsLink[0]];
           reloaded.disconnectInput(reloaded.inputs.findIndex(i=>i.name==='prompts'));
           const disconnectedPrompt=Object.values((await app.graphToPrompt()).output)
-            .find(n=>n.class_type==='BatchImageGenerate');
+            .find(n=>n.class_type==='SinyukImageAPIBatchGenerate');
           const restoredPrompts=app.graph._nodes.find(n=>n.comfyClass==='PrimitiveStringMultiline');
           restoredPrompts.connect(0,reloaded,reloaded.inputs.findIndex(i=>i.name==='prompts'));
           const restoredKey=reloadedConfig.widgets.find(w=>w.name==='api_key');
@@ -144,7 +144,7 @@ async def main():
             stage:'planned',base_count:10,prompt_count:4,total:40,concurrency:4,
             directory:'output/image_api/example',completed:0,success:0,failed:0
           }}));
-          for(const n of app.graph._nodes.filter(n=>n.comfyClass==='ImageAPILoadImagesFromFolder')) {
+          for(const n of app.graph._nodes.filter(n=>n.comfyClass==='SinyukImageAPILoadFolder')) {
             n.onExecuted({image_api_files:['001.png','002.png']});
           }
           const setReloaded = (name,value) => {const w=reloaded.widgets.find(item=>item.name===name);
@@ -184,16 +184,16 @@ async def main():
         assert "prompts" not in result["disconnectedPrompt"]["inputs"]
         assert result["disconnectedPrompt"]["inputs"]["prompt"] == result["reloadedFallback"]
         assert key_paths(result["apiOutput"], TEST_KEY) == [
-            (next(k for k, v in result["apiOutput"].items() if v["class_type"] == "ImageAPIConfig"),
+            (next(k for k, v in result["apiOutput"].items() if v["class_type"] == "SinyukImageAPIConfig"),
              "inputs", "api_key")
         ]
         for key_path in key_paths(result["serialized"], TEST_KEY):
             assert key_path[0] == "nodes"
-            assert result["serialized"]["nodes"][key_path[1]]["type"] == "ImageAPIConfig"
+            assert result["serialized"]["nodes"][key_path[1]]["type"] == "SinyukImageAPIConfig"
             assert key_path[2:] in [("widgets_values", 0), ("widgets_values_named", "api_key")]
         assert key_paths(result["serialized"], TEST_KEY)  # Confirm the documented workflow risk exists.
         for saved in result["serialized"]["nodes"]:
-            if saved["type"] == "ImageAPILoadImagesFromFolder":
+            if saved["type"] == "SinyukImageAPILoadFolder":
                 assert "image_api_files" not in saved.get("widgets_values_named", {})
         await page.mouse.click(*result["aspectPoint"])
         expected_label = "1024x1024 (1:1, 1K)"
@@ -203,10 +203,10 @@ async def main():
         await option.click()
         prompt = await page.evaluate("app.graphToPrompt()")
         generated = next(value for value in prompt["output"].values()
-                         if value["class_type"] == "BatchImageGenerate")
+                         if value["class_type"] == "SinyukImageAPIBatchGenerate")
         assert generated["inputs"]["model.aspectRatio"] == "1024x1024"
         await page.evaluate("""async () => {
-          const batch=app.graph._nodes.find(n=>n.comfyClass==='BatchImageGenerate');
+          const batch=app.graph._nodes.find(n=>n.comfyClass==='SinyukImageAPIBatchGenerate');
           const {api}=await import('/scripts/api.js');
           api.dispatchEvent(new CustomEvent('image-api.batch', {detail: {
             node_id:batch.id,ui_token:batch.properties.image_api_ui_token,sequence:102,
