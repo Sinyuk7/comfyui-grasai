@@ -216,3 +216,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# User-owned model/transport settings are never overwritten by upgrades.
+/grsai_config.json
+
+# Paid-test artifacts and input photos are local, not release contents.
+/tests/outputs/
+/tests/images/

@@ -1,0 +1,14 @@
+{
+  "name": "reference-outfit-edit-1k",
+  "images": [
+    "图片1 人物.webp",
+    "图片 2 上衣.webp",
+    "图片 3 裤子.webp"
+  ],
+  "prompt": "Edit Image 1 as the base image. Change only the woman's clothes: replace her existing upper-body outfit with the exact top from Image 2, and replace her trousers with the exact trousers from Image 3. Use Image 2 only as the top reference and Image 3 only as the trousers reference. Faithfully preserve each reference garment's original color, fabric, cut, proportions, seams, pleats, collar, sleeves, buttons, belt and other visible construction details; fit the garments naturally to her unchanged body and pose. Render the new clothes under Image 1's existing light direction, softness, highlights, shadows and overall color grading, not the product photos' lighting. Keep her identity, face, expression, hairstyle, body proportions, pose, hand positions, handbag, shoes and accessories unchanged. Preserve the original camera angle, subject placement, framing, composition, background, floor, white borders and existing headline text. Do not copy product-photo backgrounds, measurement annotations or captions. Change nothing else.",
+  "prompt_zh": "以图片1为基础进行编辑。只改变人物的服装：将她现有的上半身服装替换为图片2中的同款上衣，将裤子替换为图片3中的同款裤子。图片2仅作为上衣参考，图片3仅作为裤子参考。忠实保持参考服装的原始颜色、面料、剪裁、比例、缝线、褶裥、领口、袖子、纽扣、腰带及其他可见结构细节，并使服装自然贴合人物不变的身体与姿势。新服装的光照方向、柔硬度、高光、阴影和整体色调必须匹配图片1，而不是产品图的光影。保持人物身份、脸部、表情、发型、身体比例、姿势、手部位置、手提包、鞋子和配饰不变。保持原有拍摄角度、人物位置、取景、构图、背景、地面、白色边框和现有标题文字不变。不要复制产品图的背景、尺寸标注或说明文字。其他部分不变。",
+  "models": {
+    "nano-banana-2": {"aspectRatio": "3:4", "imageSize": "1K"},
+    "gpt-image-2.5": {"aspectRatio": "1090x1443", "quality": "auto"}
+  }
+}
