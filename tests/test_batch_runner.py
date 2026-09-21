@@ -12,6 +12,8 @@ from grsai.batch_plan import plan_batch
 from grsai.batch_runner import BatchRunner
 from grsai.batch_storage import BatchStore, StorageError
 from grsai.client import GrsaiClient
+from grsai.errors import GrsaiError
+from grsai.runninghub_config import get_runninghub_catalog
 from test_config_images import png
 
 KEY = "batch-secret-key"
@@ -309,6 +311,62 @@ async def test_base_encoding_is_reused_across_variants(config, tmp_path, monkeyp
     batch = runner(config, tmp_path, plan(3, ["one", "two", "three", "four"]))
     images, _ = await batch.run()
     assert len(images) == 12 and len(encoded) == 4  # One shared image, three varying images.
+
+
+async def test_runninghub_uploads_are_bounded_and_deduplicated(config, tmp_path):
+    catalog = get_runninghub_catalog()
+    model = catalog.default_model
+    parameters = {name: rule.default for name, rule in catalog.profile(model).parameters.items()}
+    batch = BatchRunner(
+        config, KEY, plan(1), model, parameters, 2, "Clothes", tmp_path, provider="runninghub"
+    )
+    active = peak = 0
+    uploads = []
+
+    class Client:
+        sessions = (object(), object())
+
+        async def upload_image(self, session, content, index):
+            nonlocal active, peak
+            uploads.append(content)
+            active += 1
+            peak = max(peak, active)
+            await asyncio.sleep(0.02)
+            active -= 1
+            return f"https://example.test/{content.decode()}.png"
+
+    files = [f"image-{index}".encode() for index in range(8)] + [b"image-0", b"image-1"]
+    urls = await batch._runninghub_urls(Client(), files)
+    assert peak == 8
+    assert len(uploads) == 8
+    assert urls[0] == urls[8] and urls[1] == urls[9]
+
+
+async def test_runninghub_failed_upload_is_not_cached(config, tmp_path):
+    catalog = get_runninghub_catalog()
+    model = catalog.default_model
+    parameters = {name: rule.default for name, rule in catalog.profile(model).parameters.items()}
+    batch = BatchRunner(
+        config, KEY, plan(1), model, parameters, 2, "Clothes", tmp_path, provider="runninghub"
+    )
+    attempts = 0
+
+    class Client:
+        sessions = (object(), object())
+
+        async def upload_image(self, session, content, index):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise GrsaiError("temporary upload failure")
+            return "https://example.test/recovered.png"
+
+    with pytest.raises(GrsaiError, match="temporary upload failure"):
+        await batch._runninghub_urls(Client(), [b"same-image"])
+    assert await batch._runninghub_urls(Client(), [b"same-image"]) == [
+        "https://example.test/recovered.png"
+    ]
+    assert attempts == 2
 
 
 async def test_progress_failure_is_nonfatal(config, tmp_path, monkeypatch):

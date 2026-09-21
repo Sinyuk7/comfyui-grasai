@@ -18,6 +18,8 @@ from .request_builder import build_request, build_runninghub_request, normalize_
 from .runninghub_client import RunningHubClient
 from .runninghub_config import get_runninghub_catalog
 
+RUNNINGHUB_UPLOAD_CONCURRENCY = 8
+
 
 class BatchRunner:
     def __init__(self, config, key, plan, model, parameters, concurrency, prefix, output_root,
@@ -57,6 +59,7 @@ class BatchRunner:
         self.encoded = {}
         self.uploaded = {}
         self.upload_lock = asyncio.Lock()
+        self.upload_semaphore = asyncio.Semaphore(RUNNINGHUB_UPLOAD_CONCURRENCY)
         self.remaining = {base: len(plan.prompts) for base in range(1, plan.base_count + 1)}
         self.active = {}
 
@@ -107,16 +110,31 @@ class BatchRunner:
             images.append(self.encoded[cache_key])
         return images
 
+    async def _runninghub_upload(self, client, content, index):
+        async with self.upload_semaphore:
+            return await client.upload_image(client.sessions[0], content, index)
+
+    async def _runninghub_url(self, client, content, index):
+        digest = hashlib.sha256(content).hexdigest()
+        async with self.upload_lock:
+            upload = self.uploaded.get(digest)
+            if upload is None:
+                upload = asyncio.create_task(self._runninghub_upload(client, content, index))
+                self.uploaded[digest] = upload
+        try:
+            return await asyncio.shield(upload)
+        except BaseException:
+            if upload.done():
+                async with self.upload_lock:
+                    if self.uploaded.get(digest) is upload:
+                        self.uploaded.pop(digest, None)
+            raise
+
     async def _runninghub_urls(self, client, files):
-        urls = []
-        for index, content in enumerate(files, 1):
-            digest = hashlib.sha256(content).hexdigest()
-            async with self.upload_lock:
-                if digest not in self.uploaded:
-                    api = client.sessions[0]
-                    self.uploaded[digest] = await client.upload_image(api, content, index)
-                urls.append(self.uploaded[digest])
-        return urls
+        return await asyncio.gather(*(
+            self._runninghub_url(client, content, index)
+            for index, content in enumerate(files, 1)
+        ))
 
     def _release(self, base):
         self.remaining[base] -= 1
@@ -252,6 +270,11 @@ class BatchRunner:
                     if not task.done():
                         task.cancel()
                 await asyncio.gather(*workers, return_exceptions=True)
+                uploads = list(self.uploaded.values())
+                for task in uploads:
+                    if not task.done():
+                        task.cancel()
+                await asyncio.gather(*uploads, return_exceptions=True)
 
     async def run(self):
         started = time.monotonic()
